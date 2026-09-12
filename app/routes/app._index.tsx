@@ -25,7 +25,7 @@ const SENT_ORDERS_KEY = 'shopify_sent_orders';
 // ===== LOADER =====
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin } = await authenticate.admin(request);
-  
+
   try {
     const response = await admin.graphql(
       `#graphql
@@ -79,11 +79,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     );
 
     const responseJson = await response.json() as any;
-    
+
     if (responseJson.errors) {
       return { orders: [], error: 'Failed to fetch orders: ' + JSON.stringify(responseJson.errors) };
     }
-    
+
     const orders = responseJson.data?.orders?.edges?.map((edge: any) => edge.node) || [];
     return { orders };
   } catch (error) {
@@ -99,25 +99,25 @@ export default function OrdersIndex() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const hasLoaded = useRef(false);
-  
+
   // ===== AUTH STATE =====
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [loginError, setLoginError] = useState<string | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
-  
+
   // ===== DELIVERY STATE =====
   const [deliveryDates, setDeliveryDates] = useState<{ [key: string]: string }>({});
   const [boxCounts, setBoxCounts] = useState<{ [key: string]: number }>({});
   const [sendingStatus, setSendingStatus] = useState<{ [key: string]: 'idle' | 'sending' | 'success' | 'error' }>({});
   const [sendMessages, setSendMessages] = useState<{ [key: string]: string }>({});
-  
+
   // ===== CHECKBOX STATE =====
   const [selectedOrders, setSelectedOrders] = useState<{ [key: string]: boolean }>({});
   const [groupSelectAll, setGroupSelectAll] = useState<{ [key: string]: boolean }>({});
   const [batchSending, setBatchSending] = useState<{ [key: string]: boolean }>({});
-  
+
   // ===== OTHER STATE =====
   const [selectedLabelSize, setSelectedLabelSize] = useState<string>("4-per-page");
   const [sentOrders, setSentOrders] = useState<{ [key: string]: { doNumber: string, date: string, boxes: number, resentCount: number } }>({});
@@ -131,7 +131,7 @@ export default function OrdersIndex() {
       // Check if user is already logged in
       const token = localStorage.getItem("auth_token");
       const userData = localStorage.getItem("user");
-      
+
       if (token && userData) {
         setIsLoggedIn(true);
         try {
@@ -141,10 +141,10 @@ export default function OrdersIndex() {
           setUserPrefix(parsedUser?.prefix || "DO");
         } catch (e) { console.error(e); }
       }
-      
+
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) setSelectedLabelSize(saved);
-      
+
       const savedSentOrders = localStorage.getItem(SENT_ORDERS_KEY);
       if (savedSentOrders) {
         try { setSentOrders(JSON.parse(savedSentOrders)); } catch (e) { console.error(e); }
@@ -157,29 +157,29 @@ export default function OrdersIndex() {
     e.preventDefault();
     setLoginError(null);
     setIsLoggingIn(true);
-    
+
     try {
       // ✅ Call your backend login API
-      const response = await fetch("https://dtrack-backend-0zzv.onrender.com/api/auth/shopify-login", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ email: loginEmail, password: loginPassword }),
-});
-      
+      const response = await fetch("https://dtrack-backend-0zzv.onrender.com/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: loginEmail, password: loginPassword }),
+      });
+
       const data = await response.json();
-      
+
       if (response.ok && data.success) {
         // ✅ Store token and user data in localStorage
         localStorage.setItem("auth_token", data.token);
         localStorage.setItem("user", JSON.stringify(data.user));
-        
+
         // ✅ Update state to show dashboard (NO redirect!)
         setGroupId(data.user?.groupId || data.user?.group_id || null);
         setGroupName(data.user?.groupName || data.user?.group_name || null);
         setUserPrefix(data.user?.prefix || "DO");
         setIsLoggedIn(true);
         setIsLoggingIn(false);
-        
+
         shopify.toast.show("Login successful!");
       } else {
         setLoginError(data.error || "Invalid email or password");
@@ -208,7 +208,7 @@ export default function OrdersIndex() {
   useEffect(() => {
     if (hasLoaded.current || !isLoggedIn) return;
     hasLoaded.current = true;
-    
+
     if (loaderData) {
       if (loaderData.error) {
         setError(loaderData.error);
@@ -236,7 +236,7 @@ export default function OrdersIndex() {
   // Set default delivery dates
   useEffect(() => {
     if (!isLoggedIn) return;
-    
+
     const getDefaultDate = () => {
       const now = new Date();
       const hour = now.getHours();
@@ -246,12 +246,12 @@ export default function OrdersIndex() {
       targetDate.setDate(targetDate.getDate() + (isPastCutOff ? 2 : 1));
       return targetDate.toISOString().split('T')[0];
     };
-    
+
     const defaultDate = getDefaultDate();
     const dates: { [key: string]: string } = {};
     const boxes: { [key: string]: number } = {};
     const selected: { [key: string]: boolean } = {};
-    
+
     orders.forEach(order => {
       if (sentOrders[order.id]) {
         dates[order.id] = sentOrders[order.id].date;
@@ -262,7 +262,7 @@ export default function OrdersIndex() {
       }
       selected[order.id] = false;
     });
-    
+
     setDeliveryDates(dates);
     setBoxCounts(boxes);
     setSelectedOrders(selected);
@@ -415,36 +415,36 @@ export default function OrdersIndex() {
   const sendToMealCart = async (order: any) => {
     const orderId = order.id;
     const isResend = isOrderSent(orderId);
-    
+
     setSendingStatus(prev => ({ ...prev, [orderId]: 'sending' }));
     setSendMessages(prev => ({ ...prev, [orderId]: '' }));
-    
+
     try {
       const token = typeof window !== 'undefined' ? localStorage.getItem("auth_token") : null;
-      
+
       const firstName = order.customer?.firstName || '';
       const lastName = order.customer?.lastName || '';
       const fullName = `${firstName} ${lastName}`.trim() || 'Unknown';
       const email = order.customer?.email || '';
       const customerPhone = order.customer?.phone || order.shippingAddress?.phone || '';
-      
+
       const shipping = order.shippingAddress || {};
       const address1 = shipping.address1 || '';
       const address2 = shipping.address2 || '';
       const fullAddress = address2 ? `${address1}, ${address2}` : address1;
-      
+
       const lineItems = order.lineItems?.edges || [];
       const contents = lineItems.map((edge: any) => edge.node.title).join(', ');
-      
+
       const deliveryDate = deliveryDates[orderId] || new Date().toISOString().split('T')[0];
       const boxesCount = boxCounts[orderId] || 1;
       const orderNumber = order.name?.replace('#', '') || '0000';
       const timestamp = Date.now().toString().slice(-6);
       const doNumber = isResend ? sentOrders[orderId].doNumber : `${userPrefix}-${orderNumber}-${timestamp}`;
-      
+
       const barcodes = [];
       for (let i = 1; i <= boxesCount; i++) barcodes.push(`${doNumber}-${String(i).padStart(2, '0')}`);
-      
+
       const jobData = {
         do_number: doNumber, date: deliveryDate, time_window: "07:00-18:00",
         address: fullAddress || address1 || "Address not provided",
@@ -456,28 +456,28 @@ export default function OrdersIndex() {
         country: shipping.country || "Australia", company_name: "", customer_name: fullName,
         contents, barcodes,
       };
-      
+
       const response = await fetch("https://dtrack-backend-0zzv.onrender.com/api/create-job", {
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
         body: JSON.stringify(jobData),
       });
-      
+
       const data = await response.json();
-      
+
       if (response.ok && data.success) {
         const resentCount = isResend ? (sentOrders[orderId].resentCount || 0) + 1 : 0;
         setSentOrders(prev => ({
           ...prev,
           [orderId]: { doNumber, date: deliveryDate, boxes: boxesCount, resentCount }
         }));
-        
+
         setSendingStatus(prev => ({ ...prev, [orderId]: 'success' }));
         setSendMessages(prev => ({ ...prev, [orderId]: `✅ ${isResend ? 'Resent' : 'Created'}: ${doNumber}` }));
         shopify.toast.show(`✅ Delivery ${doNumber} created!`);
-        
+
         await autoDownloadLabels(order, doNumber, boxesCount);
-        
+
         setTimeout(() => {
           setSendingStatus(prev => ({ ...prev, [orderId]: 'idle' }));
           setSendMessages(prev => ({ ...prev, [orderId]: '' }));
@@ -500,10 +500,10 @@ export default function OrdersIndex() {
   const sendBatchToMealCart = async (groupKey: string, groupOrders: any[]) => {
     const selectedOrderIds = getSelectedOrderIds(groupOrders);
     if (selectedOrderIds.length === 0) { shopify.toast.show("Select at least one order"); return; }
-    
+
     setBatchSending(prev => ({ ...prev, [groupKey]: true }));
     let successCount = 0, failCount = 0;
-    
+
     for (const orderId of selectedOrderIds) {
       const order = groupOrders.find(o => o.id === orderId);
       if (!order) continue;
@@ -513,10 +513,10 @@ export default function OrdersIndex() {
         await new Promise(r => setTimeout(r, 500));
       } catch { failCount++; }
     }
-    
+
     setBatchSending(prev => ({ ...prev, [groupKey]: false }));
     shopify.toast.show(successCount > 0 ? `✅ Sent ${successCount} orders` : `❌ All failed`);
-    
+
     const newSelected = { ...selectedOrders };
     groupOrders.forEach(o => { newSelected[o.id] = false; });
     setSelectedOrders(newSelected);
@@ -730,7 +730,7 @@ export default function OrdersIndex() {
                 const anySelected = areAnySelected(group.orders);
                 const selectedCount = getSelectedOrderIds(group.orders).length;
                 const isBatchSending = batchSending[groupKey] || false;
-                
+
                 return (
                   <div key={groupKey} style={{ marginBottom: "32px" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px", borderBottom: "1px solid #e1e3e5", paddingBottom: "8px", flexWrap: "wrap", gap: "8px" }}>
@@ -750,12 +750,12 @@ export default function OrdersIndex() {
                         </button>
                       )}
                     </div>
-                    
+
                     <div style={{ overflowX: "auto", width: "100%" }}>
                       <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: "13px", minWidth: "1200px" }}>
                         <thead>
                           <tr>
-                            {['Select','Order','Customer','Email','Phone','Address','Items','Total','Delivery Date','Boxes','Action'].map(h => (
+                            {['Select', 'Order', 'Customer', 'Email', 'Phone', 'Address', 'Items', 'Total', 'Delivery Date', 'Boxes', 'Action'].map(h => (
                               <th key={h} style={{ padding: "10px 6px", borderBottom: "1px solid #e1e3e5", fontWeight: "600", fontSize: "11px", color: "#6d7175", whiteSpace: "nowrap", width: h === 'Select' ? "40px" : "auto" }}>{h}</th>
                             ))}
                           </tr>
@@ -769,12 +769,12 @@ export default function OrdersIndex() {
                             const message = sendMessages[orderId] || '';
                             const sent = isOrderSent(orderId);
                             const sentDetails = getSentOrderDetails(orderId);
-                            
+
                             const fullName = `${order.customer?.firstName || ''} ${order.customer?.lastName || ''}`.trim() || 'Guest';
                             const shipping = order.shippingAddress || {};
                             const fullAddress = [shipping.address1, shipping.address2, shipping.city, shipping.provinceCode, shipping.zip].filter(Boolean).join(', ') || 'N/A';
                             const itemCount = order.lineItems?.edges?.length || 0;
-                            
+
                             return (
                               <tr key={orderId || index}>
                                 <td style={{ padding: "10px 6px", borderBottom: "1px solid #e1e3e5" }}>
