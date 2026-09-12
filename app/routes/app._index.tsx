@@ -120,7 +120,7 @@ export default function OrdersIndex() {
 
   // ===== OTHER STATE =====
   const [selectedLabelSize, setSelectedLabelSize] = useState<string>("4-per-page");
-  const [sentOrders, setSentOrders] = useState<{ [key: string]: { doNumber: string, date: string, boxes: number, resentCount: number } }>({});
+  const [sentOrders, setSentOrders] = useState<{ [key: string]: { doNumber: string, date: string, boxes: number } }>({});
   const [groupId, setGroupId] = useState<string | null>(null);
   const [groupName, setGroupName] = useState<string | null>(null);
   const [userPrefix, setUserPrefix] = useState<string>("DO");
@@ -414,7 +414,12 @@ export default function OrdersIndex() {
 
   const sendToMealCart = async (order: any) => {
     const orderId = order.id;
-    const isResend = isOrderSent(orderId);
+
+    // Guard: don't send if already sent
+    if (isOrderSent(orderId)) {
+      shopify.toast.show("This order has already been sent");
+      return;
+    }
 
     setSendingStatus(prev => ({ ...prev, [orderId]: 'sending' }));
     setSendMessages(prev => ({ ...prev, [orderId]: '' }));
@@ -440,7 +445,7 @@ export default function OrdersIndex() {
       const boxesCount = boxCounts[orderId] || 1;
       const orderNumber = order.name?.replace('#', '') || '0000';
       const timestamp = Date.now().toString().slice(-6);
-      const doNumber = isResend ? sentOrders[orderId].doNumber : `${userPrefix}-${orderNumber}-${timestamp}`;
+      const doNumber = `${userPrefix}-${orderNumber}-${timestamp}`;
 
       const barcodes = [];
       for (let i = 1; i <= boxesCount; i++) barcodes.push(`${doNumber}-${String(i).padStart(2, '0')}`);
@@ -466,14 +471,13 @@ export default function OrdersIndex() {
       const data = await response.json();
 
       if (response.ok && data.success) {
-        const resentCount = isResend ? (sentOrders[orderId].resentCount || 0) + 1 : 0;
         setSentOrders(prev => ({
           ...prev,
-          [orderId]: { doNumber, date: deliveryDate, boxes: boxesCount, resentCount }
+          [orderId]: { doNumber, date: deliveryDate, boxes: boxesCount }
         }));
 
         setSendingStatus(prev => ({ ...prev, [orderId]: 'success' }));
-        setSendMessages(prev => ({ ...prev, [orderId]: `✅ ${isResend ? 'Resent' : 'Created'}: ${doNumber}` }));
+        setSendMessages(prev => ({ ...prev, [orderId]: `✅ Created: ${doNumber}` }));
         shopify.toast.show(`✅ Delivery ${doNumber} created!`);
 
         await autoDownloadLabels(order, doNumber, boxesCount);
@@ -498,8 +502,12 @@ export default function OrdersIndex() {
   };
 
   const sendBatchToMealCart = async (groupKey: string, groupOrders: any[]) => {
-    const selectedOrderIds = getSelectedOrderIds(groupOrders);
-    if (selectedOrderIds.length === 0) { shopify.toast.show("Select at least one order"); return; }
+    // Exclude orders that were already sent
+    const selectedOrderIds = getSelectedOrderIds(groupOrders).filter(id => !isOrderSent(id));
+    if (selectedOrderIds.length === 0) {
+      shopify.toast.show("No unsent orders selected");
+      return;
+    }
 
     setBatchSending(prev => ({ ...prev, [groupKey]: true }));
     let successCount = 0, failCount = 0;
@@ -728,7 +736,7 @@ export default function OrdersIndex() {
                 const groupKey = group.date;
                 const allSelected = areAllSelected(group.orders);
                 const anySelected = areAnySelected(group.orders);
-                const selectedCount = getSelectedOrderIds(group.orders).length;
+                const selectedCount = getSelectedOrderIds(group.orders).filter(id => !isOrderSent(id)).length;
                 const isBatchSending = batchSending[groupKey] || false;
 
                 return (
@@ -741,10 +749,10 @@ export default function OrdersIndex() {
                           <span style={{ fontSize: "13px", fontWeight: "400", color: "#6d7175", marginLeft: "8px" }}>
                             ({group.orders.length} order{group.orders.length > 1 ? 's' : ''})
                           </span>
-                          {anySelected && <span style={{ fontSize: "12px", color: "#b98900", marginLeft: "8px" }}>• {selectedCount} selected</span>}
+                          {selectedCount > 0 && <span style={{ fontSize: "12px", color: "#b98900", marginLeft: "8px" }}>• {selectedCount} selected</span>}
                         </h4>
                       </div>
-                      {anySelected && (
+                      {selectedCount > 0 && (
                         <button onClick={() => sendBatchToMealCart(groupKey, group.orders)} disabled={isBatchSending} style={{ padding: "6px 16px", backgroundColor: isBatchSending ? "#6d7175" : "#006e52", color: "white", border: "none", borderRadius: "4px", cursor: isBatchSending ? "not-allowed" : "pointer", fontSize: "12px", fontWeight: "500" }}>
                           {isBatchSending ? `⏳ Sending ${selectedCount}...` : `📤 Send Selected (${selectedCount})`}
                         </button>
@@ -778,7 +786,14 @@ export default function OrdersIndex() {
                             return (
                               <tr key={orderId || index}>
                                 <td style={{ padding: "10px 6px", borderBottom: "1px solid #e1e3e5" }}>
-                                  <input type="checkbox" checked={selectedOrders[orderId] || false} onChange={(e) => handleSelectOrder(orderId, e.target.checked)} disabled={isSending || isSuccess} style={{ width: "15px", height: "15px" }} />
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedOrders[orderId] || false}
+                                    onChange={(e) => handleSelectOrder(orderId, e.target.checked)}
+                                    disabled={sent || isSending}
+                                    style={{ width: "15px", height: "15px" }}
+                                    title={sent ? "This order has already been sent" : ""}
+                                  />
                                 </td>
                                 <td style={{ padding: "10px 6px", borderBottom: "1px solid #e1e3e5" }}>
                                   <a href={`https://admin.shopify.com/apps/orders/${orderId?.split('/').pop()}`} target="_blank" rel="noopener noreferrer" style={{ color: "#006e52", textDecoration: "none", fontWeight: "600" }}>
@@ -796,19 +811,81 @@ export default function OrdersIndex() {
                                   {order.totalPriceSet?.shopMoney?.amount || '0.00'} {order.totalPriceSet?.shopMoney?.currencyCode || 'USD'}
                                 </td>
                                 <td style={{ padding: "10px 6px", borderBottom: "1px solid #e1e3e5" }}>
-                                  <input type="date" value={deliveryDates[orderId] || ''} onChange={(e) => updateDeliveryDate(orderId, e.target.value)} style={{ padding: "5px 6px", border: "1px solid #d1d2d4", borderRadius: "4px", fontSize: "12px", width: "130px" }} disabled={isSending || isSuccess} />
+                                  <input
+                                    type="date"
+                                    value={deliveryDates[orderId] || ''}
+                                    onChange={(e) => updateDeliveryDate(orderId, e.target.value)}
+                                    style={{ padding: "5px 6px", border: "1px solid #d1d2d4", borderRadius: "4px", fontSize: "12px", width: "130px" }}
+                                    disabled={sent || isSending}
+                                  />
                                 </td>
                                 <td style={{ padding: "10px 6px", borderBottom: "1px solid #e1e3e5" }}>
-                                  <input type="number" min="1" max="100" value={boxCounts[orderId] || 1} onChange={(e) => updateBoxCount(orderId, parseInt(e.target.value) || 1)} style={{ padding: "5px 6px", border: "1px solid #d1d2d4", borderRadius: "4px", fontSize: "12px", width: "55px" }} disabled={isSending || isSuccess} />
+                                  <input
+                                    type="number"
+                                    min="1"
+                                    max="100"
+                                    value={boxCounts[orderId] || 1}
+                                    onChange={(e) => updateBoxCount(orderId, parseInt(e.target.value) || 1)}
+                                    style={{ padding: "5px 6px", border: "1px solid #d1d2d4", borderRadius: "4px", fontSize: "12px", width: "55px" }}
+                                    disabled={sent || isSending}
+                                  />
                                 </td>
                                 <td style={{ padding: "10px 6px", borderBottom: "1px solid #e1e3e5" }}>
-                                  <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
-                                    <button onClick={() => sendToMealCart(order)} disabled={isSending || isSuccess} style={{ padding: "5px 12px", backgroundColor: isSuccess ? "#006e52" : isError ? "#bf0711" : sent ? "#b98900" : "#006e52", color: "white", border: "none", borderRadius: "4px", cursor: (isSending || isSuccess) ? "not-allowed" : "pointer", fontSize: "12px", fontWeight: "500", whiteSpace: "nowrap" }}>
-                                      {isSending ? "⏳ Sending..." : isSuccess ? "✅ Sent" : isError ? "⚠️ Retry" : sent ? "🔄 Resend" : "📤 Send"}
-                                    </button>
-                                    {sent && !isSuccess && <div style={{ fontSize: "9px", color: "#6d7175" }}>DO: {sentDetails?.doNumber || 'N/A'}</div>}
-                                    {message && <div style={{ fontSize: "10px", color: isSuccess ? "#006e52" : isError ? "#bf0711" : "#6d7175" }}>{message}</div>}
-                                  </div>
+                                  {sent ? (
+                                    // Already sent — locked, no resend option
+                                    <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
+                                      <span style={{
+                                        display: "inline-block",
+                                        padding: "5px 12px",
+                                        backgroundColor: "#e3f1df",
+                                        color: "#006e52",
+                                        border: "1px solid #006e52",
+                                        borderRadius: "4px",
+                                        fontSize: "12px",
+                                        fontWeight: "600",
+                                        whiteSpace: "nowrap",
+                                        textAlign: "center"
+                                      }}>
+                                        ✅ Sent
+                                      </span>
+                                      <div style={{ fontSize: "9px", color: "#6d7175", textAlign: "center" }}>
+                                        DO: {sentDetails?.doNumber || "N/A"}
+                                      </div>
+                                      <div style={{ fontSize: "9px", color: "#6d7175", textAlign: "center" }}>
+                                        {sentDetails?.date} • {sentDetails?.boxes} box{sentDetails?.boxes > 1 ? "es" : ""}
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    // Not sent yet — show send button
+                                    <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
+                                      <button
+                                        onClick={() => sendToMealCart(order)}
+                                        disabled={isSending}
+                                        style={{
+                                          padding: "5px 12px",
+                                          backgroundColor: isError ? "#bf0711" : "#006e52",
+                                          color: "white",
+                                          border: "none",
+                                          borderRadius: "4px",
+                                          cursor: isSending ? "not-allowed" : "pointer",
+                                          fontSize: "12px",
+                                          fontWeight: "500",
+                                          whiteSpace: "nowrap"
+                                        }}
+                                      >
+                                        {isSending ? "⏳ Sending..." : isError ? "⚠️ Retry" : "📤 Send"}
+                                      </button>
+                                      {message && (
+                                        <div style={{
+                                          fontSize: "10px",
+                                          color: isError ? "#bf0711" : "#6d7175",
+                                          textAlign: "center"
+                                        }}>
+                                          {message}
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
                                 </td>
                               </tr>
                             );
