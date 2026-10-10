@@ -48,6 +48,13 @@ const DAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const;
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const DAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
+// ===== AUSTRALIAN STATES =====
+const AUSTRALIAN_STATES = [
+  "New South Wales", "Victoria", "Queensland",
+  "Western Australia", "South Australia", "Tasmania",
+  "Australian Capital Territory", "Northern Territory"
+];
+
 // ===== LOADER =====
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin } = await authenticate.admin(request);
@@ -139,6 +146,35 @@ export default function OrdersIndex() {
   const [sendingStatus, setSendingStatus] = useState<{ [key: string]: 'idle' | 'sending' | 'success' | 'error' }>({});
   const [sendMessages, setSendMessages] = useState<{ [key: string]: string }>({});
 
+  // ===== ✏️ EDITED ADDRESS STATE =====
+  // Stores user-edited addresses per order. If not present, use Shopify's address.
+  const [editedAddresses, setEditedAddresses] = useState<{
+    [orderId: string]: {
+      name: string;
+      phone: string;
+      address1: string;
+      address2: string;
+      city: string;
+      provinceCode: string;
+      zip: string;
+      country: string;
+    }
+  }>({});
+
+  // ===== ✏️ ADDRESS EDIT MODAL STATE =====
+  const [editingOrder, setEditingOrder] = useState<any | null>(null);
+  const [editForm, setEditForm] = useState({
+    name: '',
+    phone: '',
+    address1: '',
+    address2: '',
+    city: '',
+    provinceCode: '',
+    zip: '',
+    country: 'Australia',
+  });
+  const [editSaving, setEditSaving] = useState(false);
+
   // ===== POSTCODE VALIDATION STATE =====
   const [postcodeValidation, setPostcodeValidation] = useState<{
     [orderId: string]: {
@@ -166,6 +202,75 @@ export default function OrdersIndex() {
   const [groupName, setGroupName] = useState<string | null>(null);
   const [userPrefix, setUserPrefix] = useState<string>("DO");
 
+  // ===== GET EFFECTIVE ADDRESS (edited or original) =====
+  const getEffectiveAddress = (order: any) => {
+    const edited = editedAddresses[order.id];
+    if (edited) return edited;
+    const s = order.shippingAddress || {};
+    return {
+      name: s.name || `${order.customer?.firstName || ''} ${order.customer?.lastName || ''}`.trim() || '',
+      phone: s.phone || order.customer?.phone || '',
+      address1: s.address1 || '',
+      address2: s.address2 || '',
+      city: s.city || '',
+      provinceCode: s.provinceCode || s.province || '',
+      zip: s.zip || '',
+      country: s.country || 'Australia',
+    };
+  };
+
+  // ===== OPEN EDIT MODAL =====
+  const openEditModal = (order: any) => {
+    const addr = getEffectiveAddress(order);
+    setEditingOrder(order);
+    setEditForm({
+      name: addr.name,
+      phone: addr.phone,
+      address1: addr.address1,
+      address2: addr.address2,
+      city: addr.city,
+      provinceCode: addr.provinceCode,
+      zip: addr.zip,
+      country: addr.country,
+    });
+  };
+
+  // ===== SAVE EDITED ADDRESS =====
+  const saveEditedAddress = () => {
+    if (!editingOrder) return;
+    setEditSaving(true);
+
+    setEditedAddresses(prev => ({
+      ...prev,
+      [editingOrder.id]: {
+        name: editForm.name,
+        phone: editForm.phone,
+        address1: editForm.address1,
+        address2: editForm.address2,
+        city: editForm.city,
+        provinceCode: editForm.provinceCode,
+        zip: editForm.zip,
+        country: editForm.country,
+      }
+    }));
+
+    // Clear validation for this order (will re-run on postcode change)
+    setPostcodeValidation(prev => {
+      const next = { ...prev };
+      delete next[editingOrder.id];
+      return next;
+    });
+
+    shopify.toast.show("Address updated");
+    setEditingOrder(null);
+    setEditSaving(false);
+  };
+
+  // ===== CANCEL EDIT =====
+  const cancelEdit = () => {
+    setEditingOrder(null);
+  };
+
   // ===== LOAD FROM LOCALSTORAGE ON MOUNT =====
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -189,8 +294,34 @@ export default function OrdersIndex() {
       if (savedSentOrders) {
         try { setSentOrders(JSON.parse(savedSentOrders)); } catch (e) { console.error(e); }
       }
+
+      const savedEditedAddresses = localStorage.getItem('shopify_edited_addresses');
+      if (savedEditedAddresses) {
+        try { setEditedAddresses(JSON.parse(savedEditedAddresses)); } catch (e) { console.error(e); }
+      }
     }
   }, []);
+
+  // Persist sent orders
+  useEffect(() => {
+    if (typeof window !== 'undefined' && Object.keys(sentOrders).length > 0) {
+      localStorage.setItem(SENT_ORDERS_KEY, JSON.stringify(sentOrders));
+    }
+  }, [sentOrders]);
+
+  // Persist edited addresses
+  useEffect(() => {
+    if (typeof window !== 'undefined' && Object.keys(editedAddresses).length > 0) {
+      localStorage.setItem('shopify_edited_addresses', JSON.stringify(editedAddresses));
+    }
+  }, [editedAddresses]);
+
+  // Persist label size
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(STORAGE_KEY, selectedLabelSize);
+    }
+  }, [selectedLabelSize]);
 
   // ===== HANDLE LOGIN =====
   const handleLogin = async (e: React.FormEvent) => {
@@ -229,7 +360,6 @@ export default function OrdersIndex() {
     }
   };
 
-  // ===== HANDLE LOGOUT =====
   const handleLogout = () => {
     if (typeof window !== 'undefined') {
       localStorage.removeItem("auth_token");
@@ -241,7 +371,7 @@ export default function OrdersIndex() {
     shopify.toast.show("Logged out successfully");
   };
 
-  // ===== LOAD ORDERS WHEN LOGGED IN =====
+  // Load orders
   useEffect(() => {
     if (hasLoaded.current || !isLoggedIn) return;
     hasLoaded.current = true;
@@ -255,20 +385,6 @@ export default function OrdersIndex() {
       setIsLoading(false);
     }
   }, [loaderData, isLoggedIn]);
-
-  // Save sent orders
-  useEffect(() => {
-    if (typeof window !== 'undefined' && Object.keys(sentOrders).length > 0) {
-      localStorage.setItem(SENT_ORDERS_KEY, JSON.stringify(sentOrders));
-    }
-  }, [sentOrders]);
-
-  // Save label size
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem(STORAGE_KEY, selectedLabelSize);
-    }
-  }, [selectedLabelSize]);
 
   // Set default delivery dates
   useEffect(() => {
@@ -305,10 +421,8 @@ export default function OrdersIndex() {
     setSelectedOrders(selected);
   }, [orders, sentOrders, isLoggedIn]);
 
-  // ===== POSTCODE VALIDATION FUNCTION =====
-  // ✅ Removed 4-digit format validation — API validates everything
+  // ===== POSTCODE VALIDATION (no 4-digit check) =====
   const validatePostcodeForOrder = async (orderId: string, postcode: string, dateStr: string) => {
-    // Only skip if postcode or date is truly empty
     if (!postcode || !postcode.trim() || !dateStr) {
       setPostcodeValidation(prev => ({
         ...prev,
@@ -317,7 +431,6 @@ export default function OrdersIndex() {
       return;
     }
 
-    // Set checking status
     setPostcodeValidation(prev => ({
       ...prev,
       [orderId]: { status: 'checking', postCode: postcode }
@@ -353,23 +466,19 @@ export default function OrdersIndex() {
         return;
       }
 
-      // Get the schedule data
       const schedule = data.data?.schedule || {};
       const days = data.data?.days || schedule;
       const suburb = schedule.suburb_town || '';
       const run = schedule.run || '';
 
-      // Get day of week from selected date
       const dateObj = new Date(dateStr + 'T00:00:00');
-      const dayIndex = dateObj.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
-      const dayKey = DAY_KEYS[dayIndex]; // 'sun', 'mon', etc.
+      const dayIndex = dateObj.getDay();
+      const dayKey = DAY_KEYS[dayIndex];
       const dayName = DAY_NAMES[dayIndex];
 
-      // Check if the selected day is deliverable
       const isDeliverable = days[dayKey] === true;
 
       if (isDeliverable) {
-        // ✅ Valid
         setPostcodeValidation(prev => ({
           ...prev,
           [orderId]: {
@@ -383,7 +492,6 @@ export default function OrdersIndex() {
           }
         }));
       } else {
-        // ❌ Invalid - find next available day
         let nextAvailableDay: string | undefined;
         let nextAvailableDate: string | undefined;
 
@@ -428,15 +536,20 @@ export default function OrdersIndex() {
     }
   };
 
-  // ===== AUTO-VALIDATE WHEN POSTCODE OR DATE CHANGES =====
+  // ===== AUTO-VALIDATE — ✅ SKIPS ALREADY SENT ORDERS =====
   useEffect(() => {
     if (!isLoggedIn || orders.length === 0) return;
 
     const timers: NodeJS.Timeout[] = [];
 
     orders.forEach(order => {
-      const shipping = order.shippingAddress || {};
-      const postcode = (shipping.zip || '').trim();
+      // ✅ Skip validation if order already sent
+      if (sentOrders[order.id]) {
+        return;
+      }
+
+      const addr = getEffectiveAddress(order);
+      const postcode = (addr.zip || '').trim();
       const date = deliveryDates[order.id];
 
       if (postcode && date) {
@@ -455,7 +568,7 @@ export default function OrdersIndex() {
     return () => {
       timers.forEach(t => clearTimeout(t));
     };
-  }, [orders, deliveryDates, isLoggedIn]);
+  }, [orders, deliveryDates, isLoggedIn, sentOrders, editedAddresses]);
 
   // ===== HELPERS =====
   const updateDeliveryDate = (orderId: string, date: string) => {
@@ -584,18 +697,12 @@ export default function OrdersIndex() {
     try {
       const barcodes = [];
       for (let i = 1; i <= boxesCount; i++) barcodes.push(`${doNumber}-${String(i).padStart(2, '0')}`);
-      const firstName = order.customer?.firstName || '';
-      const lastName = order.customer?.lastName || '';
-      const fullName = `${firstName} ${lastName}`.trim() || 'Unknown';
-      const phone = order.customer?.phone || order.shippingAddress?.phone || '';
-      const shipping = order.shippingAddress || {};
-      const address1 = shipping.address1 || '';
-      const address2 = shipping.address2 || '';
-      const fullAddress = address2 ? `${address1}, ${address2}` : address1;
+      const addr = getEffectiveAddress(order);
 
       const result = await generateAndDownloadLabels(
-        doNumber, barcodes, fullName, fullAddress, '', phone, '',
-        shipping.provinceCode || shipping.province || '', shipping.zip || '', shipping.city || ''
+        doNumber, barcodes, addr.name,
+        addr.address2 ? `${addr.address1}, ${addr.address2}` : addr.address1,
+        '', addr.phone, '', addr.provinceCode, addr.zip, addr.city
       );
 
       if (result.success) {
@@ -636,16 +743,12 @@ export default function OrdersIndex() {
     try {
       const token = typeof window !== 'undefined' ? localStorage.getItem("auth_token") : null;
 
-      const firstName = order.customer?.firstName || '';
-      const lastName = order.customer?.lastName || '';
-      const fullName = `${firstName} ${lastName}`.trim() || 'Unknown';
+      // ✅ Use edited address if user changed it
+      const addr = getEffectiveAddress(order);
+      const fullName = addr.name || 'Unknown';
       const email = order.customer?.email || '';
-      const customerPhone = order.customer?.phone || order.shippingAddress?.phone || '';
-
-      const shipping = order.shippingAddress || {};
-      const address1 = shipping.address1 || '';
-      const address2 = shipping.address2 || '';
-      const fullAddress = address2 ? `${address1}, ${address2}` : address1;
+      const customerPhone = addr.phone || '';
+      const fullAddress = addr.address2 ? `${addr.address1}, ${addr.address2}` : addr.address1;
 
       const lineItems = order.lineItems?.edges || [];
       const contents = lineItems.map((edge: any) => edge.node.title).join(', ');
@@ -659,14 +762,13 @@ export default function OrdersIndex() {
       const barcodes = [];
       for (let i = 1; i <= boxesCount; i++) barcodes.push(`${doNumber}-${String(i).padStart(2, '0')}`);
 
-      // ✅ Full address is sent to backend — nothing removed
       const jobData = {
         do_number: doNumber,
         date: deliveryDate,
         time_window: "07:00-18:00",
-        address: fullAddress || address1 || "Address not provided",  // Full address
+        address: fullAddress || addr.address1 || "Address not provided",
         deliver_to: fullName,
-        phone: customerPhone || shipping.phone || "Not provided",
+        phone: customerPhone || "Not provided",
         notify_email: email,
         instructions: "",
         group_id: groupId || "",
@@ -675,12 +777,12 @@ export default function OrdersIndex() {
         cartons: boxesCount,
         boxes: boxesCount,
         weight: 0,
-        address_1: address1,                                     // Street
-        address_2: address2 || "",                               // Apt/Suite
-        postal_code: shipping.zip || "",                          // Postcode
-        city: shipping.city || "",                                // City
-        state: shipping.provinceCode || shipping.province || "",  // State
-        country: shipping.country || "Australia",
+        address_1: addr.address1,
+        address_2: addr.address2,
+        postal_code: addr.zip,
+        city: addr.city,
+        state: addr.provinceCode,
+        country: addr.country || "Australia",
         company_name: "",
         customer_name: fullName,
         contents,
@@ -787,21 +889,13 @@ export default function OrdersIndex() {
   if (!isLoggedIn) {
     return (
       <div style={{
-        width: "100%",
-        minHeight: "100vh",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        backgroundColor: THEME.white,
-        padding: "20px",
-        boxSizing: "border-box"
+        width: "100%", minHeight: "100vh",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        backgroundColor: THEME.white, padding: "20px", boxSizing: "border-box"
       }}>
         <div style={{
-          width: "100%",
-          maxWidth: "420px",
-          backgroundColor: THEME.white,
-          borderRadius: "12px",
-          padding: "48px 36px",
+          width: "100%", maxWidth: "420px", backgroundColor: THEME.white,
+          borderRadius: "12px", padding: "48px 36px",
           boxShadow: "0 10px 30px rgba(45, 156, 219, 0.15)",
           fontFamily: "'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
         }}>
@@ -824,13 +918,9 @@ export default function OrdersIndex() {
 
           {loginError && (
             <div style={{
-              padding: "12px",
-              backgroundColor: THEME.dangerLight,
-              border: `1px solid ${THEME.dangerBorder}`,
-              borderRadius: "8px",
-              marginBottom: "20px",
-              color: THEME.danger,
-              fontSize: "14px"
+              padding: "12px", backgroundColor: THEME.dangerLight,
+              border: `1px solid ${THEME.dangerBorder}`, borderRadius: "8px",
+              marginBottom: "20px", color: THEME.danger, fontSize: "14px"
             }}>
               {loginError}
             </div>
@@ -918,7 +1008,6 @@ export default function OrdersIndex() {
     );
   }
 
-  // ===== LOADING STATE =====
   if (isLoading) {
     return (
       <div style={{ width: "100%", padding: "60px 20px", textAlign: "center" }}>
@@ -948,15 +1037,9 @@ export default function OrdersIndex() {
         alignItems: "center", flexWrap: "wrap", gap: "8px"
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-          <img
-            src="https://www.mealcart.com.au/assets/img/logo.png"
-            alt="MealCart"
-            style={{ height: "32px", objectFit: "contain" }}
-          />
-          <h1 style={{
-            margin: 0, fontSize: "20px", fontWeight: "600", color: THEME.textDark,
-            fontFamily: "'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
-          }}>
+          <img src="https://www.mealcart.com.au/assets/img/logo.png" alt="MealCart" style={{ height: "32px", objectFit: "contain" }} />
+          <h1 style={{ margin: 0, fontSize: "20px", fontWeight: "600", color: THEME.textDark,
+            fontFamily: "'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" }}>
             📦 Shopify Orders
           </h1>
         </div>
@@ -967,11 +1050,9 @@ export default function OrdersIndex() {
               value={selectedLabelSize}
               onChange={(e) => setSelectedLabelSize(e.target.value)}
               style={{
-                padding: "5px 10px",
-                border: `1px solid ${THEME.primaryBorder}`,
+                padding: "5px 10px", border: `1px solid ${THEME.primaryBorder}`,
                 borderRadius: "4px", fontSize: "12px",
-                backgroundColor: THEME.white, cursor: "pointer",
-                color: THEME.textDark
+                backgroundColor: THEME.white, cursor: "pointer", color: THEME.textDark
               }}
             >
               {LABEL_SIZES.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
@@ -992,7 +1073,6 @@ export default function OrdersIndex() {
         </div>
       </div>
 
-      {/* Content */}
       <div style={{ width: "100%", padding: "20px 24px", boxSizing: "border-box" }}>
         <div style={{
           width: "100%", backgroundColor: THEME.white,
@@ -1097,20 +1177,20 @@ export default function OrdersIndex() {
                             const sent = isOrderSent(orderId);
                             const sentDetails = getSentOrderDetails(orderId);
                             const validation = postcodeValidation[orderId] || { status: 'idle' };
+                            const addr = getEffectiveAddress(order);
+                            const hasEditedAddress = !!editedAddresses[orderId];
 
-                            const shipping = order.shippingAddress || {};
-                            const postcode = (shipping.zip || '').trim();
                             const fullAddress = [
-                              shipping.address1,
-                              shipping.address2,
-                              shipping.city,
-                              shipping.provinceCode,
-                              shipping.zip
+                              addr.address1,
+                              addr.address2,
+                              addr.city,
+                              addr.provinceCode,
+                              addr.zip
                             ].filter(Boolean).join(', ') || 'N/A';
 
-                            const fullName = `${order.customer?.firstName || ''} ${order.customer?.lastName || ''}`.trim() || 'Guest';
+                            const fullName = addr.name || 'Guest';
                             const email = order.customer?.email || 'N/A';
-                            const phone = order.customer?.phone || shipping.phone || 'N/A';
+                            const phone = addr.phone || 'N/A';
                             const itemCount = order.lineItems?.edges?.length || 0;
 
                             const canSend = !sent && 
@@ -1139,21 +1219,66 @@ export default function OrdersIndex() {
                                     {order.name}
                                   </a>
                                 </td>
-                                <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}` }}>{fullName}</td>
+                                <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}` }}>
+                                  {fullName}
+                                  {hasEditedAddress && (
+                                    <span style={{ marginLeft: "6px", fontSize: "10px", color: THEME.primary, fontWeight: "600" }}>
+                                      (edited)
+                                    </span>
+                                  )}
+                                </td>
                                 <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}`, fontSize: "12px" }}>
                                   {email}
                                 </td>
                                 <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}`, fontSize: "12px" }}>
                                   {phone}
                                 </td>
-                                {/* ✅ ADDRESS FIELD - Restored */}
+                                {/* ✅ ADDRESS CELL WITH EDIT ICON */}
                                 <td style={{
                                   padding: "10px 6px",
                                   borderBottom: `1px solid ${THEME.border}`,
                                   fontSize: "12px",
-                                  maxWidth: "220px"
+                                  maxWidth: "240px",
+                                  position: "relative"
                                 }}>
-                                  <div style={{ wordBreak: "break-word" }}>{fullAddress}</div>
+                                  <div style={{ display: "flex", alignItems: "flex-start", gap: "6px" }}>
+                                    <div style={{ flex: 1, wordBreak: "break-word" }}>{fullAddress}</div>
+                                    <button
+                                      onClick={() => openEditModal(order)}
+                                      disabled={sent}
+                                      title={sent ? "Cannot edit — order already sent" : "Edit address"}
+                                      style={{
+                                        padding: "2px",
+                                        background: "none",
+                                        border: `1px solid ${THEME.primaryBorder}`,
+                                        borderRadius: "4px",
+                                        cursor: sent ? "not-allowed" : "pointer",
+                                        color: THEME.primary,
+                                        display: "flex",
+                                        alignItems: "center",
+                                        justifyContent: "center",
+                                        flexShrink: 0,
+                                        opacity: sent ? 0.4 : 1,
+                                        transition: "all 0.15s"
+                                      }}
+                                      onMouseEnter={(e) => {
+                                        if (!sent) {
+                                          e.currentTarget.style.backgroundColor = THEME.primaryLight;
+                                          e.currentTarget.style.borderColor = THEME.primary;
+                                        }
+                                      }}
+                                      onMouseLeave={(e) => {
+                                        e.currentTarget.style.backgroundColor = "transparent";
+                                        e.currentTarget.style.borderColor = THEME.primaryBorder;
+                                      }}
+                                    >
+                                      {/* Edit (pencil) SVG icon */}
+                                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                                      </svg>
+                                    </button>
+                                  </div>
                                 </td>
                                 <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}`, fontSize: "12px" }}>
                                   {itemCount} items
@@ -1193,9 +1318,13 @@ export default function OrdersIndex() {
                                     disabled={sent || isSending}
                                   />
                                 </td>
-                                {/* Postcode validation status */}
+                                {/* ✅ POSTCODE STATUS — SKIPS ALREADY SENT ORDERS */}
                                 <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}`, minWidth: "200px" }}>
-                                  {validation.status === 'checking' && (
+                                  {sent ? (
+                                    <span style={{ fontSize: "11px", color: THEME.textMuted }}>
+                                      — (already sent)
+                                    </span>
+                                  ) : validation.status === 'checking' ? (
                                     <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: THEME.textMuted }}>
                                       <div style={{
                                         width: "12px", height: "12px",
@@ -1206,9 +1335,7 @@ export default function OrdersIndex() {
                                       }} />
                                       Checking...
                                     </div>
-                                  )}
-
-                                  {validation.status === 'valid' && (
+                                  ) : validation.status === 'valid' ? (
                                     <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
                                       <span style={{
                                         display: "inline-block", padding: "3px 8px",
@@ -1224,9 +1351,7 @@ export default function OrdersIndex() {
                                         </div>
                                       )}
                                     </div>
-                                  )}
-
-                                  {validation.status === 'invalid' && (
+                                  ) : validation.status === 'invalid' ? (
                                     <div style={{
                                       display: "flex", flexDirection: "column", gap: "3px",
                                       padding: "6px 8px", backgroundColor: THEME.dangerLight,
@@ -1250,15 +1375,11 @@ export default function OrdersIndex() {
                                         </div>
                                       )}
                                     </div>
-                                  )}
-
-                                  {validation.status === 'no-postcode' && (
+                                  ) : validation.status === 'no-postcode' ? (
                                     <span style={{ fontSize: "11px", color: THEME.danger }}>
                                       ⚠️ No postcode in order
                                     </span>
-                                  )}
-
-                                  {validation.status === 'idle' && !postcode && (
+                                  ) : (
                                     <span style={{ fontSize: "11px", color: THEME.textMuted }}>
                                       Waiting...
                                     </span>
@@ -1340,6 +1461,294 @@ export default function OrdersIndex() {
           ) : null}
         </div>
       </div>
+
+      {/* ===== ✏️ ADDRESS EDIT MODAL ===== */}
+      {editingOrder && (
+        <div
+          style={{
+            position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
+            backgroundColor: "rgba(0,0,0,0.5)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            zIndex: 1000, padding: "20px", boxSizing: "border-box"
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) cancelEdit();
+          }}
+        >
+          <div style={{
+            backgroundColor: THEME.white,
+            borderRadius: "12px",
+            padding: "28px",
+            maxWidth: "600px",
+            maxHeight: "90vh",
+            overflow: "auto",
+            width: "100%",
+            position: "relative",
+            boxShadow: "0 20px 60px rgba(0,0,0,0.3)",
+            fontFamily: "'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+          }}>
+            {/* Header */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "24px" }}>
+              <div>
+                <h2 style={{ margin: "0 0 4px 0", fontSize: "20px", fontWeight: "600", color: THEME.textDark }}>
+                  ✏️ Edit Delivery Address
+                </h2>
+                <p style={{ margin: 0, fontSize: "13px", color: THEME.textMuted }}>
+                  Order <strong>{editingOrder.name}</strong>
+                </p>
+              </div>
+              <button
+                onClick={cancelEdit}
+                style={{
+                  background: "none", border: "none",
+                  fontSize: "24px", cursor: "pointer",
+                  color: THEME.textMuted, padding: 0,
+                  width: "32px", height: "32px",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  borderRadius: "4px"
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = THEME.primaryLight; }}
+                onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
+              >
+                ×
+              </button>
+            </div>
+
+            {/* Info banner */}
+            <div style={{
+              padding: "10px 14px",
+              backgroundColor: THEME.primaryLight,
+              border: `1px solid ${THEME.primaryBorder}`,
+              borderRadius: "8px",
+              marginBottom: "20px",
+              fontSize: "12px",
+              color: THEME.textDark
+            }}>
+              💡 This edits the address for <strong>this delivery only</strong>. It will not update the original Shopify order.
+            </div>
+
+            {/* Form */}
+            <div style={{ display: "grid", gap: "16px" }}>
+              {/* Recipient Name */}
+              <div>
+                <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: "500", color: THEME.textDark }}>
+                  Recipient Name
+                </label>
+                <input
+                  type="text"
+                  value={editForm.name}
+                  onChange={(e) => setEditForm(prev => ({ ...prev, name: e.target.value }))}
+                  style={{
+                    width: "100%", padding: "10px 12px",
+                    border: `1px solid ${THEME.primaryBorder}`,
+                    borderRadius: "8px", fontSize: "14px",
+                    boxSizing: "border-box", outline: "none",
+                    backgroundColor: THEME.white, color: THEME.textDark
+                  }}
+                  onFocus={(e) => { e.target.style.borderColor = THEME.primary; }}
+                  onBlur={(e) => { e.target.style.borderColor = THEME.primaryBorder; }}
+                />
+              </div>
+
+              {/* Phone */}
+              <div>
+                <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: "500", color: THEME.textDark }}>
+                  Phone Number
+                </label>
+                <input
+                  type="tel"
+                  value={editForm.phone}
+                  onChange={(e) => setEditForm(prev => ({ ...prev, phone: e.target.value }))}
+                  placeholder="0412 345 678"
+                  style={{
+                    width: "100%", padding: "10px 12px",
+                    border: `1px solid ${THEME.primaryBorder}`,
+                    borderRadius: "8px", fontSize: "14px",
+                    boxSizing: "border-box", outline: "none",
+                    backgroundColor: THEME.white, color: THEME.textDark
+                  }}
+                  onFocus={(e) => { e.target.style.borderColor = THEME.primary; }}
+                  onBlur={(e) => { e.target.style.borderColor = THEME.primaryBorder; }}
+                />
+              </div>
+
+              {/* Address Line 1 */}
+              <div>
+                <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: "500", color: THEME.textDark }}>
+                  Address Line 1
+                </label>
+                <input
+                  type="text"
+                  value={editForm.address1}
+                  onChange={(e) => setEditForm(prev => ({ ...prev, address1: e.target.value }))}
+                  placeholder="123 Main St"
+                  style={{
+                    width: "100%", padding: "10px 12px",
+                    border: `1px solid ${THEME.primaryBorder}`,
+                    borderRadius: "8px", fontSize: "14px",
+                    boxSizing: "border-box", outline: "none",
+                    backgroundColor: THEME.white, color: THEME.textDark
+                  }}
+                  onFocus={(e) => { e.target.style.borderColor = THEME.primary; }}
+                  onBlur={(e) => { e.target.style.borderColor = THEME.primaryBorder; }}
+                />
+              </div>
+
+              {/* Address Line 2 */}
+              <div>
+                <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: "500", color: THEME.textDark }}>
+                  Address Line 2 <span style={{ color: THEME.textMuted, fontWeight: "400" }}>(optional)</span>
+                </label>
+                <input
+                  type="text"
+                  value={editForm.address2}
+                  onChange={(e) => setEditForm(prev => ({ ...prev, address2: e.target.value }))}
+                  placeholder="Apt, Suite, Building..."
+                  style={{
+                    width: "100%", padding: "10px 12px",
+                    border: `1px solid ${THEME.primaryBorder}`,
+                    borderRadius: "8px", fontSize: "14px",
+                    boxSizing: "border-box", outline: "none",
+                    backgroundColor: THEME.white, color: THEME.textDark
+                  }}
+                  onFocus={(e) => { e.target.style.borderColor = THEME.primary; }}
+                  onBlur={(e) => { e.target.style.borderColor = THEME.primaryBorder; }}
+                />
+              </div>
+
+              {/* City + State */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+                <div>
+                  <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: "500", color: THEME.textDark }}>
+                    City
+                  </label>
+                  <input
+                    type="text"
+                    value={editForm.city}
+                    onChange={(e) => setEditForm(prev => ({ ...prev, city: e.target.value }))}
+                    placeholder="Melbourne"
+                    style={{
+                      width: "100%", padding: "10px 12px",
+                      border: `1px solid ${THEME.primaryBorder}`,
+                      borderRadius: "8px", fontSize: "14px",
+                      boxSizing: "border-box", outline: "none",
+                      backgroundColor: THEME.white, color: THEME.textDark
+                    }}
+                    onFocus={(e) => { e.target.style.borderColor = THEME.primary; }}
+                    onBlur={(e) => { e.target.style.borderColor = THEME.primaryBorder; }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: "500", color: THEME.textDark }}>
+                    State
+                  </label>
+                  <select
+                    value={editForm.provinceCode}
+                    onChange={(e) => setEditForm(prev => ({ ...prev, provinceCode: e.target.value }))}
+                    style={{
+                      width: "100%", padding: "10px 12px",
+                      border: `1px solid ${THEME.primaryBorder}`,
+                      borderRadius: "8px", fontSize: "14px",
+                      boxSizing: "border-box", outline: "none",
+                      backgroundColor: THEME.white, color: THEME.textDark,
+                      cursor: "pointer"
+                    }}
+                  >
+                    <option value="">Select state...</option>
+                    <option value="NSW">NSW — New South Wales</option>
+                    <option value="VIC">VIC — Victoria</option>
+                    <option value="QLD">QLD — Queensland</option>
+                    <option value="WA">WA — Western Australia</option>
+                    <option value="SA">SA — South Australia</option>
+                    <option value="TAS">TAS — Tasmania</option>
+                    <option value="ACT">ACT — Australian Capital Territory</option>
+                    <option value="NT">NT — Northern Territory</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Postcode + Country */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+                <div>
+                  <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: "500", color: THEME.textDark }}>
+                    Postcode
+                  </label>
+                  <input
+                    type="text"
+                    value={editForm.zip}
+                    onChange={(e) => setEditForm(prev => ({ ...prev, zip: e.target.value }))}
+                    placeholder="3000"
+                    style={{
+                      width: "100%", padding: "10px 12px",
+                      border: `1px solid ${THEME.primaryBorder}`,
+                      borderRadius: "8px", fontSize: "14px",
+                      boxSizing: "border-box", outline: "none",
+                      backgroundColor: THEME.white, color: THEME.textDark
+                    }}
+                    onFocus={(e) => { e.target.style.borderColor = THEME.primary; }}
+                    onBlur={(e) => { e.target.style.borderColor = THEME.primaryBorder; }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: "500", color: THEME.textDark }}>
+                    Country                  </label>
+                  <input
+                    type="text"
+                    value={editForm.country}
+                    onChange={(e) => setEditForm(prev => ({ ...prev, country: e.target.value }))}
+                    style={{
+                      width: "100%", padding: "10px 12px",
+                      border: `1px solid ${THEME.primaryBorder}`,
+                      borderRadius: "8px", fontSize: "14px",
+                      boxSizing: "border-box", outline: "none",
+                      backgroundColor: THEME.white, color: THEME.textDark
+                    }}
+                    onFocus={(e) => { e.target.style.borderColor = THEME.primary; }}
+                    onBlur={(e) => { e.target.style.borderColor = THEME.primaryBorder; }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div style={{ display: "flex", gap: "12px", justifyContent: "flex-end", marginTop: "24px" }}>
+              <button
+                onClick={cancelEdit}
+                disabled={editSaving}
+                style={{
+                  padding: "10px 20px",
+                  backgroundColor: THEME.white,
+                  color: THEME.textDark,
+                  border: `1px solid ${THEME.primaryBorder}`,
+                  borderRadius: "8px",
+                  cursor: editSaving ? "not-allowed" : "pointer",
+                  fontSize: "14px", fontWeight: "500"
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveEditedAddress}
+                disabled={editSaving}
+                style={{
+                  padding: "10px 20px",
+                  background: editSaving
+                    ? "#a8c8dc"
+                    : `linear-gradient(135deg, ${THEME.primary} 0%, ${THEME.primaryDark} 100%)`,
+                  color: "white",
+                  border: "none",
+                  borderRadius: "8px",
+                  cursor: editSaving ? "not-allowed" : "pointer",
+                  fontSize: "14px", fontWeight: "600",
+                  boxShadow: editSaving ? "none" : "0 4px 12px rgba(45, 156, 219, 0.3)"
+                }}
+              >
+                {editSaving ? "Saving..." : "Save Address"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
