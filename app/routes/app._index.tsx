@@ -306,24 +306,13 @@ export default function OrdersIndex() {
   }, [orders, sentOrders, isLoggedIn]);
 
   // ===== POSTCODE VALIDATION FUNCTION =====
+  // ✅ Removed 4-digit format validation — API validates everything
   const validatePostcodeForOrder = async (orderId: string, postcode: string, dateStr: string) => {
-    if (!postcode || !dateStr) {
+    // Only skip if postcode or date is truly empty
+    if (!postcode || !postcode.trim() || !dateStr) {
       setPostcodeValidation(prev => ({
         ...prev,
         [orderId]: { status: 'no-postcode', message: 'Missing postcode or date' }
-      }));
-      return;
-    }
-
-    // Check postcode format (Australian = 4 digits)
-    if (!/^\d{4}$/.test(postcode.trim())) {
-      setPostcodeValidation(prev => ({
-        ...prev,
-        [orderId]: {
-          status: 'invalid',
-          message: `Invalid postcode format "${postcode}" (must be 4 digits)`,
-          postCode: postcode,
-        }
       }));
       return;
     }
@@ -357,7 +346,7 @@ export default function OrdersIndex() {
           ...prev,
           [orderId]: {
             status: 'invalid',
-            message: data.error || `Cannot validate postcode ${postcode}`,
+            message: data.error || `Postcode ${postcode} is not deliverable`,
             postCode: postcode,
           }
         }));
@@ -375,7 +364,6 @@ export default function OrdersIndex() {
       const dayIndex = dateObj.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
       const dayKey = DAY_KEYS[dayIndex]; // 'sun', 'mon', etc.
       const dayName = DAY_NAMES[dayIndex];
-      const dayShort = DAY_SHORT[dayIndex];
 
       // Check if the selected day is deliverable
       const isDeliverable = days[dayKey] === true;
@@ -399,7 +387,6 @@ export default function OrdersIndex() {
         let nextAvailableDay: string | undefined;
         let nextAvailableDate: string | undefined;
 
-        // Look ahead up to 7 days to find the next available delivery day
         for (let i = 1; i <= 7; i++) {
           const nextDate = new Date(dateObj);
           nextDate.setDate(nextDate.getDate() + i);
@@ -455,7 +442,7 @@ export default function OrdersIndex() {
       if (postcode && date) {
         const timer = setTimeout(() => {
           validatePostcodeForOrder(order.id, postcode, date);
-        }, 500); // Debounce 500ms
+        }, 500);
         timers.push(timer);
       } else if (!postcode) {
         setPostcodeValidation(prev => ({
@@ -486,7 +473,6 @@ export default function OrdersIndex() {
   };
 
   const handleSelectOrder = (orderId: string, checked: boolean) => {
-    // Block selecting invalid postcodes
     if (checked && postcodeValidation[orderId]?.status === 'invalid') {
       shopify.toast.show("Cannot select: invalid postcode for the selected date");
       return;
@@ -497,7 +483,6 @@ export default function OrdersIndex() {
   const handleSelectAll = (groupKey: string, checked: boolean, groupOrders: any[]) => {
     const newSelected = { ...selectedOrders };
     groupOrders.forEach(order => {
-      // Only select orders with valid or idle postcode
       if (checked && postcodeValidation[order.id]?.status === 'invalid') {
         newSelected[order.id] = false;
       } else {
@@ -634,7 +619,6 @@ export default function OrdersIndex() {
       return;
     }
 
-    // ✅ BLOCK if postcode validation failed
     const validation = postcodeValidation[orderId];
     if (validation?.status === 'invalid') {
       shopify.toast.show(`❌ Cannot send: ${validation.message}`);
@@ -675,16 +659,32 @@ export default function OrdersIndex() {
       const barcodes = [];
       for (let i = 1; i <= boxesCount; i++) barcodes.push(`${doNumber}-${String(i).padStart(2, '0')}`);
 
+      // ✅ Full address is sent to backend — nothing removed
       const jobData = {
-        do_number: doNumber, date: deliveryDate, time_window: "07:00-18:00",
-        address: fullAddress || address1 || "Address not provided",
-        deliver_to: fullName, phone: customerPhone || shipping.phone || "Not provided",
-        notify_email: email, instructions: "", group_id: groupId || "", group_name: groupName || "",
-        delivery_type: "delivery", cartons: boxesCount, boxes: boxesCount, weight: 0,
-        address_1: address1, address_2: address2, postal_code: shipping.zip || "",
-        city: shipping.city || "", state: shipping.provinceCode || shipping.province || "",
-        country: shipping.country || "Australia", company_name: "", customer_name: fullName,
-        contents, barcodes,
+        do_number: doNumber,
+        date: deliveryDate,
+        time_window: "07:00-18:00",
+        address: fullAddress || address1 || "Address not provided",  // Full address
+        deliver_to: fullName,
+        phone: customerPhone || shipping.phone || "Not provided",
+        notify_email: email,
+        instructions: "",
+        group_id: groupId || "",
+        group_name: groupName || "",
+        delivery_type: "delivery",
+        cartons: boxesCount,
+        boxes: boxesCount,
+        weight: 0,
+        address_1: address1,                                     // Street
+        address_2: address2 || "",                               // Apt/Suite
+        postal_code: shipping.zip || "",                          // Postcode
+        city: shipping.city || "",                                // City
+        state: shipping.provinceCode || shipping.province || "",  // State
+        country: shipping.country || "Australia",
+        company_name: "",
+        customer_name: fullName,
+        contents,
+        barcodes,
       };
 
       const response = await fetch("https://dtrack-backend-0zzv.onrender.com/api/create-job", {
@@ -727,7 +727,6 @@ export default function OrdersIndex() {
   };
 
   const sendBatchToMealCart = async (groupKey: string, groupOrders: any[]) => {
-    // Only send orders that are: selected + not already sent + valid postcode
     const selectedOrderIds = getSelectedOrderIds(groupOrders).filter(id => {
       if (isOrderSent(id)) return false;
       const validation = postcodeValidation[id];
@@ -1074,11 +1073,11 @@ export default function OrdersIndex() {
                     <div style={{ overflowX: "auto", width: "100%" }}>
                       <table style={{
                         width: "100%", borderCollapse: "collapse",
-                        textAlign: "left", fontSize: "13px", minWidth: "1400px"
+                        textAlign: "left", fontSize: "13px", minWidth: "1500px"
                       }}>
                         <thead>
                           <tr>
-                            {['Select', 'Order', 'Customer', 'Postcode', 'Postcode Status', 'Delivery Date', 'Boxes', 'Items', 'Total', 'Action'].map(h => (
+                            {['Select', 'Order', 'Customer', 'Email', 'Phone', 'Address', 'Items', 'Total', 'Delivery Date', 'Boxes', 'Postcode Status', 'Action'].map(h => (
                               <th key={h} style={{
                                 padding: "10px 6px",
                                 borderBottom: `1px solid ${THEME.border}`,
@@ -1098,12 +1097,22 @@ export default function OrdersIndex() {
                             const sent = isOrderSent(orderId);
                             const sentDetails = getSentOrderDetails(orderId);
                             const validation = postcodeValidation[orderId] || { status: 'idle' };
+
                             const shipping = order.shippingAddress || {};
                             const postcode = (shipping.zip || '').trim();
+                            const fullAddress = [
+                              shipping.address1,
+                              shipping.address2,
+                              shipping.city,
+                              shipping.provinceCode,
+                              shipping.zip
+                            ].filter(Boolean).join(', ') || 'N/A';
+
                             const fullName = `${order.customer?.firstName || ''} ${order.customer?.lastName || ''}`.trim() || 'Guest';
+                            const email = order.customer?.email || 'N/A';
+                            const phone = order.customer?.phone || shipping.phone || 'N/A';
                             const itemCount = order.lineItems?.edges?.length || 0;
 
-                            // Determine if send is allowed
                             const canSend = !sent && 
                                            validation.status !== 'invalid' && 
                                            validation.status !== 'checking' &&
@@ -1129,16 +1138,62 @@ export default function OrdersIndex() {
                                   >
                                     {order.name}
                                   </a>
-                                  <div style={{ fontSize: "11px", color: THEME.textMuted }}>
-                                    {fullName}
-                                  </div>
+                                </td>
+                                <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}` }}>{fullName}</td>
+                                <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}`, fontSize: "12px" }}>
+                                  {email}
                                 </td>
                                 <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}`, fontSize: "12px" }}>
-                                  {order.customer?.email || 'N/A'}
+                                  {phone}
                                 </td>
-                                <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}`, fontSize: "12px", fontWeight: "600" }}>
-                                  {postcode || <span style={{ color: THEME.danger }}>Missing</span>}
+                                {/* ✅ ADDRESS FIELD - Restored */}
+                                <td style={{
+                                  padding: "10px 6px",
+                                  borderBottom: `1px solid ${THEME.border}`,
+                                  fontSize: "12px",
+                                  maxWidth: "220px"
+                                }}>
+                                  <div style={{ wordBreak: "break-word" }}>{fullAddress}</div>
                                 </td>
+                                <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}`, fontSize: "12px" }}>
+                                  {itemCount} items
+                                </td>
+                                <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}`, fontWeight: "600", fontSize: "12px" }}>
+                                  {order.totalPriceSet?.shopMoney?.amount || '0.00'} {order.totalPriceSet?.shopMoney?.currencyCode || 'USD'}
+                                </td>
+                                <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}` }}>
+                                  <input
+                                    type="date"
+                                    value={deliveryDates[orderId] || ''}
+                                    onChange={(e) => updateDeliveryDate(orderId, e.target.value)}
+                                    style={{
+                                      padding: "5px 6px",
+                                      border: `1px solid ${validation.status === 'invalid' ? THEME.danger : THEME.primaryBorder}`,
+                                      borderRadius: "4px", fontSize: "12px",
+                                      width: "130px", color: THEME.textDark,
+                                      backgroundColor: THEME.white
+                                    }}
+                                    disabled={sent || isSending}
+                                  />
+                                </td>
+                                <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}` }}>
+                                  <input
+                                    type="number"
+                                    min="1"
+                                    max="100"
+                                    value={boxCounts[orderId] || 1}
+                                    onChange={(e) => updateBoxCount(orderId, parseInt(e.target.value) || 1)}
+                                    style={{
+                                      padding: "5px 6px",
+                                      border: `1px solid ${THEME.primaryBorder}`,
+                                      borderRadius: "4px", fontSize: "12px",
+                                      width: "55px", color: THEME.textDark,
+                                      backgroundColor: THEME.white
+                                    }}
+                                    disabled={sent || isSending}
+                                  />
+                                </td>
+                                {/* Postcode validation status */}
                                 <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}`, minWidth: "200px" }}>
                                   {validation.status === 'checking' && (
                                     <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: THEME.textMuted }}>
@@ -1208,44 +1263,6 @@ export default function OrdersIndex() {
                                       Waiting...
                                     </span>
                                   )}
-                                </td>
-                                <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}` }}>
-                                  <input
-                                    type="date"
-                                    value={deliveryDates[orderId] || ''}
-                                    onChange={(e) => updateDeliveryDate(orderId, e.target.value)}
-                                    style={{
-                                      padding: "5px 6px",
-                                      border: `1px solid ${validation.status === 'invalid' ? THEME.danger : THEME.primaryBorder}`,
-                                      borderRadius: "4px", fontSize: "12px",
-                                      width: "130px", color: THEME.textDark,
-                                      backgroundColor: THEME.white
-                                    }}
-                                    disabled={sent || isSending}
-                                  />
-                                </td>
-                                <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}` }}>
-                                  <input
-                                    type="number"
-                                    min="1"
-                                    max="100"
-                                    value={boxCounts[orderId] || 1}
-                                    onChange={(e) => updateBoxCount(orderId, parseInt(e.target.value) || 1)}
-                                    style={{
-                                      padding: "5px 6px",
-                                      border: `1px solid ${THEME.primaryBorder}`,
-                                      borderRadius: "4px", fontSize: "12px",
-                                      width: "55px", color: THEME.textDark,
-                                      backgroundColor: THEME.white
-                                    }}
-                                    disabled={sent || isSending}
-                                  />
-                                </td>
-                                <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}`, fontSize: "12px" }}>
-                                  {itemCount}
-                                </td>
-                                <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}`, fontWeight: "600", fontSize: "12px" }}>
-                                  {order.totalPriceSet?.shopMoney?.amount || '0.00'} {order.totalPriceSet?.shopMoney?.currencyCode || 'USD'}
                                 </td>
                                 <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}` }}>
                                   {sent ? (
