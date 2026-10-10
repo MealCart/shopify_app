@@ -240,7 +240,7 @@ export default function LoginPage() {
             fontSize: "14px",
             color: "#6d7175"
           }}>
-            Don't have an account? Contact your administrator.
+            Don't have an account? Please Contact your administrator.
           </div>
         </div>
       </s-section>

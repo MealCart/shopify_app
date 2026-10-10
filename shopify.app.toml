@@ -3,7 +3,7 @@
 client_id = "c5b9978842e1f4b94c0ad03ac60f5cd4"
 name = "mealCart connector"
 handle = "mealcart-connector"
-application_url = "https://mealcart-shopify-connector.onrender.com"
+application_url = "https://mealcart-8u8h.onrender.com"
 embedded = true
 
 [build]
@@ -28,7 +28,7 @@ api_version = "2024-10"
 scopes = "read_customers,read_orders,write_fulfillments,write_orders,write_products"
 
 [auth]
-redirect_urls = [ "https://mealcart-shopify-connector.onrender.com/auth/callback" ]
+redirect_urls = [ "https://mealcart-8u8h.onrender.com/auth/callback" ]
 
 [product.metafields.app.demo_info]
 type = "single_line_text_field"
