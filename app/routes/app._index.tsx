@@ -28,7 +28,6 @@ const THEME = {
   primaryDark: "#1e88c7",
   primaryLight: "#e8f4f8",
   primaryLighter: "#d4e9f2",
-  primaryPale: "#f0f8fc",
   primaryBorder: "#c9d9e3",
   textDark: "#1a1a2e",
   textMuted: "#6b7c8c",
@@ -38,9 +37,16 @@ const THEME = {
   dangerBorder: "#f5c2c7",
   warning: "#b98900",
   warningLight: "#fef3e4",
+  success: "#006e52",
+  successLight: "#e4f5e8",
   white: "#ffffff",
   border: "#e1e3e5",
 };
+
+// ===== DAY MAP =====
+const DAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const;
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const DAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 // ===== LOADER =====
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -132,6 +138,21 @@ export default function OrdersIndex() {
   const [boxCounts, setBoxCounts] = useState<{ [key: string]: number }>({});
   const [sendingStatus, setSendingStatus] = useState<{ [key: string]: 'idle' | 'sending' | 'success' | 'error' }>({});
   const [sendMessages, setSendMessages] = useState<{ [key: string]: string }>({});
+
+  // ===== POSTCODE VALIDATION STATE =====
+  const [postcodeValidation, setPostcodeValidation] = useState<{
+    [orderId: string]: {
+      status: 'idle' | 'checking' | 'valid' | 'invalid' | 'no-postcode';
+      suburb?: string;
+      postCode?: string;
+      run?: string;
+      message?: string;
+      selectedDay?: string;
+      nextAvailableDay?: string;
+      nextAvailableDate?: string;
+      days?: any;
+    }
+  }>({});
 
   // ===== CHECKBOX STATE =====
   const [selectedOrders, setSelectedOrders] = useState<{ [key: string]: boolean }>({});
@@ -284,6 +305,171 @@ export default function OrdersIndex() {
     setSelectedOrders(selected);
   }, [orders, sentOrders, isLoggedIn]);
 
+  // ===== POSTCODE VALIDATION FUNCTION =====
+  const validatePostcodeForOrder = async (orderId: string, postcode: string, dateStr: string) => {
+    if (!postcode || !dateStr) {
+      setPostcodeValidation(prev => ({
+        ...prev,
+        [orderId]: { status: 'no-postcode', message: 'Missing postcode or date' }
+      }));
+      return;
+    }
+
+    // Check postcode format (Australian = 4 digits)
+    if (!/^\d{4}$/.test(postcode.trim())) {
+      setPostcodeValidation(prev => ({
+        ...prev,
+        [orderId]: {
+          status: 'invalid',
+          message: `Invalid postcode format "${postcode}" (must be 4 digits)`,
+          postCode: postcode,
+        }
+      }));
+      return;
+    }
+
+    // Set checking status
+    setPostcodeValidation(prev => ({
+      ...prev,
+      [orderId]: { status: 'checking', postCode: postcode }
+    }));
+
+    try {
+      const token = localStorage.getItem("auth_token");
+      const response = await fetch("https://dtrack-backend-0zzv.onrender.com/api/validate-postcode", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          postCode: postcode.trim(),
+          postcode: postcode.trim(),
+          post_code: postcode.trim(),
+          date: dateStr,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        setPostcodeValidation(prev => ({
+          ...prev,
+          [orderId]: {
+            status: 'invalid',
+            message: data.error || `Cannot validate postcode ${postcode}`,
+            postCode: postcode,
+          }
+        }));
+        return;
+      }
+
+      // Get the schedule data
+      const schedule = data.data?.schedule || {};
+      const days = data.data?.days || schedule;
+      const suburb = schedule.suburb_town || '';
+      const run = schedule.run || '';
+
+      // Get day of week from selected date
+      const dateObj = new Date(dateStr + 'T00:00:00');
+      const dayIndex = dateObj.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+      const dayKey = DAY_KEYS[dayIndex]; // 'sun', 'mon', etc.
+      const dayName = DAY_NAMES[dayIndex];
+      const dayShort = DAY_SHORT[dayIndex];
+
+      // Check if the selected day is deliverable
+      const isDeliverable = days[dayKey] === true;
+
+      if (isDeliverable) {
+        // ✅ Valid
+        setPostcodeValidation(prev => ({
+          ...prev,
+          [orderId]: {
+            status: 'valid',
+            postCode: postcode,
+            suburb,
+            run,
+            selectedDay: dayName,
+            message: `Deliverable on ${dayName}`,
+            days,
+          }
+        }));
+      } else {
+        // ❌ Invalid - find next available day
+        let nextAvailableDay: string | undefined;
+        let nextAvailableDate: string | undefined;
+
+        // Look ahead up to 7 days to find the next available delivery day
+        for (let i = 1; i <= 7; i++) {
+          const nextDate = new Date(dateObj);
+          nextDate.setDate(nextDate.getDate() + i);
+          const nextDayIndex = nextDate.getDay();
+          const nextDayKey = DAY_KEYS[nextDayIndex];
+
+          if (days[nextDayKey] === true) {
+            nextAvailableDay = DAY_NAMES[nextDayIndex];
+            nextAvailableDate = nextDate.toISOString().split('T')[0];
+            break;
+          }
+        }
+
+        setPostcodeValidation(prev => ({
+          ...prev,
+          [orderId]: {
+            status: 'invalid',
+            postCode: postcode,
+            suburb,
+            run,
+            selectedDay: dayName,
+            message: `No delivery to ${postcode}${suburb ? ` (${suburb})` : ''} on ${dayName}`,
+            nextAvailableDay,
+            nextAvailableDate,
+            days,
+          }
+        }));
+      }
+    } catch (error) {
+      console.error('Postcode validation error:', error);
+      setPostcodeValidation(prev => ({
+        ...prev,
+        [orderId]: {
+          status: 'invalid',
+          message: 'Failed to validate postcode',
+          postCode: postcode,
+        }
+      }));
+    }
+  };
+
+  // ===== AUTO-VALIDATE WHEN POSTCODE OR DATE CHANGES =====
+  useEffect(() => {
+    if (!isLoggedIn || orders.length === 0) return;
+
+    const timers: NodeJS.Timeout[] = [];
+
+    orders.forEach(order => {
+      const shipping = order.shippingAddress || {};
+      const postcode = (shipping.zip || '').trim();
+      const date = deliveryDates[order.id];
+
+      if (postcode && date) {
+        const timer = setTimeout(() => {
+          validatePostcodeForOrder(order.id, postcode, date);
+        }, 500); // Debounce 500ms
+        timers.push(timer);
+      } else if (!postcode) {
+        setPostcodeValidation(prev => ({
+          ...prev,
+          [order.id]: { status: 'no-postcode', message: 'No postcode in order' }
+        }));
+      }
+    });
+
+    return () => {
+      timers.forEach(t => clearTimeout(t));
+    };
+  }, [orders, deliveryDates, isLoggedIn]);
+
   // ===== HELPERS =====
   const updateDeliveryDate = (orderId: string, date: string) => {
     if (sentOrders[orderId]) {
@@ -300,12 +486,24 @@ export default function OrdersIndex() {
   };
 
   const handleSelectOrder = (orderId: string, checked: boolean) => {
+    // Block selecting invalid postcodes
+    if (checked && postcodeValidation[orderId]?.status === 'invalid') {
+      shopify.toast.show("Cannot select: invalid postcode for the selected date");
+      return;
+    }
     setSelectedOrders(prev => ({ ...prev, [orderId]: checked }));
   };
 
   const handleSelectAll = (groupKey: string, checked: boolean, groupOrders: any[]) => {
     const newSelected = { ...selectedOrders };
-    groupOrders.forEach(order => { newSelected[order.id] = checked; });
+    groupOrders.forEach(order => {
+      // Only select orders with valid or idle postcode
+      if (checked && postcodeValidation[order.id]?.status === 'invalid') {
+        newSelected[order.id] = false;
+      } else {
+        newSelected[order.id] = checked;
+      }
+    });
     setSelectedOrders(newSelected);
     setGroupSelectAll(prev => ({ ...prev, [groupKey]: checked }));
   };
@@ -436,6 +634,18 @@ export default function OrdersIndex() {
       return;
     }
 
+    // ✅ BLOCK if postcode validation failed
+    const validation = postcodeValidation[orderId];
+    if (validation?.status === 'invalid') {
+      shopify.toast.show(`❌ Cannot send: ${validation.message}`);
+      return;
+    }
+
+    if (validation?.status === 'checking') {
+      shopify.toast.show("⏳ Please wait — validating postcode...");
+      return;
+    }
+
     setSendingStatus(prev => ({ ...prev, [orderId]: 'sending' }));
     setSendMessages(prev => ({ ...prev, [orderId]: '' }));
 
@@ -517,9 +727,16 @@ export default function OrdersIndex() {
   };
 
   const sendBatchToMealCart = async (groupKey: string, groupOrders: any[]) => {
-    const selectedOrderIds = getSelectedOrderIds(groupOrders).filter(id => !isOrderSent(id));
+    // Only send orders that are: selected + not already sent + valid postcode
+    const selectedOrderIds = getSelectedOrderIds(groupOrders).filter(id => {
+      if (isOrderSent(id)) return false;
+      const validation = postcodeValidation[id];
+      if (validation?.status === 'invalid' || validation?.status === 'checking') return false;
+      return true;
+    });
+
     if (selectedOrderIds.length === 0) {
-      shopify.toast.show("No unsent orders selected");
+      shopify.toast.show("No valid orders selected");
       return;
     }
 
@@ -567,7 +784,7 @@ export default function OrdersIndex() {
 
   const groupedOrders = groupOrdersByDate(orders);
 
-  // ===== LOGIN PAGE (renders inside Shopify iframe) =====
+  // ===== LOGIN PAGE =====
   if (!isLoggedIn) {
     return (
       <div style={{
@@ -589,34 +806,19 @@ export default function OrdersIndex() {
           boxShadow: "0 10px 30px rgba(45, 156, 219, 0.15)",
           fontFamily: "'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
         }}>
-          {/* Logo */}
           <div style={{ textAlign: "center", marginBottom: "24px" }}>
             <img
               src="https://www.mealcart.com.au/assets/img/logo.png"
               alt="MealCart Logo"
-              style={{
-                maxWidth: "180px",
-                maxHeight: "80px",
-                objectFit: "contain",
-                display: "inline-block"
-              }}
+              style={{ maxWidth: "180px", maxHeight: "80px", objectFit: "contain", display: "inline-block" }}
             />
           </div>
 
           <div style={{ textAlign: "center", marginBottom: "32px" }}>
-            <h2 style={{
-              margin: "0 0 8px 0",
-              color: THEME.textDark,
-              fontSize: "24px",
-              fontWeight: "600"
-            }}>
+            <h2 style={{ margin: "0 0 8px 0", color: THEME.textDark, fontSize: "24px", fontWeight: "600" }}>
               Welcome Back
             </h2>
-            <p style={{
-              margin: "0",
-              color: THEME.textMuted,
-              fontSize: "14px"
-            }}>
+            <p style={{ margin: "0", color: THEME.textMuted, fontSize: "14px" }}>
               Sign in to your MealCart account
             </p>
           </div>
@@ -637,13 +839,7 @@ export default function OrdersIndex() {
 
           <form onSubmit={handleLogin}>
             <div style={{ marginBottom: "18px" }}>
-              <label style={{
-                display: "block",
-                marginBottom: "6px",
-                fontWeight: "500",
-                fontSize: "14px",
-                color: THEME.textDark
-              }}>
+              <label style={{ display: "block", marginBottom: "6px", fontWeight: "500", fontSize: "14px", color: THEME.textDark }}>
                 Email
               </label>
               <input
@@ -653,14 +849,9 @@ export default function OrdersIndex() {
                 required
                 placeholder="you@example.com"
                 style={{
-                  width: "100%",
-                  padding: "12px 14px",
-                  border: `1px solid ${THEME.primaryBorder}`,
-                  borderRadius: "8px",
-                  fontSize: "14px",
-                  boxSizing: "border-box",
-                  outline: "none",
-                  transition: "border-color 0.2s, box-shadow 0.2s",
+                  width: "100%", padding: "12px 14px",
+                  border: `1px solid ${THEME.primaryBorder}`, borderRadius: "8px",
+                  fontSize: "14px", boxSizing: "border-box", outline: "none",
                   backgroundColor: THEME.white
                 }}
                 onFocus={(e) => {
@@ -675,13 +866,7 @@ export default function OrdersIndex() {
             </div>
 
             <div style={{ marginBottom: "28px" }}>
-              <label style={{
-                display: "block",
-                marginBottom: "6px",
-                fontWeight: "500",
-                fontSize: "14px",
-                color: THEME.textDark
-              }}>
+              <label style={{ display: "block", marginBottom: "6px", fontWeight: "500", fontSize: "14px", color: THEME.textDark }}>
                 Password
               </label>
               <input
@@ -692,14 +877,9 @@ export default function OrdersIndex() {
                 placeholder="••••••••"
                 minLength={6}
                 style={{
-                  width: "100%",
-                  padding: "12px 14px",
-                  border: `1px solid ${THEME.primaryBorder}`,
-                  borderRadius: "8px",
-                  fontSize: "14px",
-                  boxSizing: "border-box",
-                  outline: "none",
-                  transition: "border-color 0.2s, box-shadow 0.2s",
+                  width: "100%", padding: "12px 14px",
+                  border: `1px solid ${THEME.primaryBorder}`, borderRadius: "8px",
+                  fontSize: "14px", boxSizing: "border-box", outline: "none",
                   backgroundColor: THEME.white
                 }}
                 onFocus={(e) => {
@@ -717,43 +897,21 @@ export default function OrdersIndex() {
               type="submit"
               disabled={isLoggingIn}
               style={{
-                width: "100%",
-                padding: "14px",
+                width: "100%", padding: "14px",
                 background: isLoggingIn
                   ? "#a8c8dc"
                   : `linear-gradient(135deg, ${THEME.primary} 0%, ${THEME.primaryDark} 100%)`,
-                color: "white",
-                border: "none",
-                borderRadius: "8px",
-                fontSize: "16px",
-                fontWeight: "600",
+                color: "white", border: "none", borderRadius: "8px",
+                fontSize: "16px", fontWeight: "600",
                 cursor: isLoggingIn ? "not-allowed" : "pointer",
-                boxShadow: isLoggingIn ? "none" : "0 4px 12px rgba(45, 156, 219, 0.3)",
-                transition: "transform 0.15s, box-shadow 0.15s"
-              }}
-              onMouseEnter={(e) => {
-                if (!isLoggingIn) {
-                  e.currentTarget.style.transform = "translateY(-1px)";
-                  e.currentTarget.style.boxShadow = "0 6px 16px rgba(45, 156, 219, 0.4)";
-                }
-              }}
-              onMouseLeave={(e) => {
-                if (!isLoggingIn) {
-                  e.currentTarget.style.transform = "translateY(0)";
-                  e.currentTarget.style.boxShadow = "0 4px 12px rgba(45, 156, 219, 0.3)";
-                }
+                boxShadow: isLoggingIn ? "none" : "0 4px 12px rgba(45, 156, 219, 0.3)"
               }}
             >
               {isLoggingIn ? "Logging in..." : "Login"}
             </button>
           </form>
 
-          <div style={{
-            marginTop: "28px",
-            textAlign: "center",
-            fontSize: "13px",
-            color: THEME.textLight
-          }}>
+          <div style={{ marginTop: "28px", textAlign: "center", fontSize: "13px", color: THEME.textLight }}>
             Please contact your administrator if you need an account
           </div>
         </div>
@@ -766,8 +924,7 @@ export default function OrdersIndex() {
     return (
       <div style={{ width: "100%", padding: "60px 20px", textAlign: "center" }}>
         <div style={{
-          width: "40px",
-          height: "40px",
+          width: "40px", height: "40px",
           border: `4px solid ${THEME.border}`,
           borderTop: `4px solid ${THEME.primary}`,
           borderRadius: "50%",
@@ -785,16 +942,11 @@ export default function OrdersIndex() {
     <div style={{ width: "100%", maxWidth: "100%", padding: 0, margin: 0, overflowX: "hidden" }}>
       {/* Header */}
       <div style={{
-        width: "100%",
-        backgroundColor: THEME.white,
+        width: "100%", backgroundColor: THEME.white,
         borderBottom: `1px solid ${THEME.border}`,
-        padding: "16px 24px",
-        boxSizing: "border-box",
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "center",
-        flexWrap: "wrap",
-        gap: "8px"
+        padding: "16px 24px", boxSizing: "border-box",
+        display: "flex", justifyContent: "space-between",
+        alignItems: "center", flexWrap: "wrap", gap: "8px"
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
           <img
@@ -803,10 +955,7 @@ export default function OrdersIndex() {
             style={{ height: "32px", objectFit: "contain" }}
           />
           <h1 style={{
-            margin: 0,
-            fontSize: "20px",
-            fontWeight: "600",
-            color: THEME.textDark,
+            margin: 0, fontSize: "20px", fontWeight: "600", color: THEME.textDark,
             fontFamily: "'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
           }}>
             📦 Shopify Orders
@@ -821,10 +970,8 @@ export default function OrdersIndex() {
               style={{
                 padding: "5px 10px",
                 border: `1px solid ${THEME.primaryBorder}`,
-                borderRadius: "4px",
-                fontSize: "12px",
-                backgroundColor: THEME.white,
-                cursor: "pointer",
+                borderRadius: "4px", fontSize: "12px",
+                backgroundColor: THEME.white, cursor: "pointer",
                 color: THEME.textDark
               }}
             >
@@ -834,14 +981,9 @@ export default function OrdersIndex() {
           <button
             onClick={handleLogout}
             style={{
-              padding: "8px 20px",
-              backgroundColor: THEME.primary,
-              color: "white",
-              border: "none",
-              borderRadius: "4px",
-              cursor: "pointer",
-              fontSize: "14px",
-              fontWeight: "500"
+              padding: "8px 20px", backgroundColor: THEME.primary,
+              color: "white", border: "none", borderRadius: "4px",
+              cursor: "pointer", fontSize: "14px", fontWeight: "500"
             }}
             onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = THEME.primaryDark; }}
             onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = THEME.primary; }}
@@ -854,29 +996,18 @@ export default function OrdersIndex() {
       {/* Content */}
       <div style={{ width: "100%", padding: "20px 24px", boxSizing: "border-box" }}>
         <div style={{
-          width: "100%",
-          backgroundColor: THEME.white,
-          borderRadius: "8px",
-          border: `1px solid ${THEME.border}`,
-          padding: "20px 24px",
-          boxSizing: "border-box"
+          width: "100%", backgroundColor: THEME.white,
+          borderRadius: "8px", border: `1px solid ${THEME.border}`,
+          padding: "20px 24px", boxSizing: "border-box"
         }}>
-          <h3 style={{
-            margin: "0 0 16px 0",
-            fontSize: "16px",
-            fontWeight: "600",
-            color: THEME.textDark
-          }}>
+          <h3 style={{ margin: "0 0 16px 0", fontSize: "16px", fontWeight: "600", color: THEME.textDark }}>
             Recent Orders
           </h3>
 
           {error && (
             <div style={{
-              padding: "12px",
-              backgroundColor: THEME.dangerLight,
-              borderRadius: "4px",
-              marginBottom: "16px",
-              color: THEME.danger
+              padding: "12px", backgroundColor: THEME.dangerLight,
+              borderRadius: "4px", marginBottom: "16px", color: THEME.danger
             }}>
               <strong>Error:</strong> {error}
             </div>
@@ -899,14 +1030,10 @@ export default function OrdersIndex() {
                 return (
                   <div key={groupKey} style={{ marginBottom: "32px" }}>
                     <div style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      marginBottom: "12px",
+                      display: "flex", justifyContent: "space-between",
+                      alignItems: "center", marginBottom: "12px",
                       borderBottom: `1px solid ${THEME.border}`,
-                      paddingBottom: "8px",
-                      flexWrap: "wrap",
-                      gap: "8px"
+                      paddingBottom: "8px", flexWrap: "wrap", gap: "8px"
                     }}>
                       <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
                         <input
@@ -915,19 +1042,9 @@ export default function OrdersIndex() {
                           onChange={(e) => handleSelectAll(groupKey, e.target.checked, group.orders)}
                           style={{ width: "16px", height: "16px", cursor: "pointer", accentColor: THEME.primary }}
                         />
-                        <h4 style={{
-                          margin: 0,
-                          fontSize: "15px",
-                          fontWeight: "600",
-                          color: THEME.textDark
-                        }}>
+                        <h4 style={{ margin: 0, fontSize: "15px", fontWeight: "600", color: THEME.textDark }}>
                           {getDateGroupName(groupKey)}
-                          <span style={{
-                            fontSize: "13px",
-                            fontWeight: "400",
-                            color: THEME.textMuted,
-                            marginLeft: "8px"
-                          }}>
+                          <span style={{ fontSize: "13px", fontWeight: "400", color: THEME.textMuted, marginLeft: "8px" }}>
                             ({group.orders.length} order{group.orders.length > 1 ? 's' : ''})
                           </span>
                           {selectedCount > 0 && (
@@ -944,12 +1061,9 @@ export default function OrdersIndex() {
                           style={{
                             padding: "6px 16px",
                             backgroundColor: isBatchSending ? THEME.textLight : THEME.primary,
-                            color: "white",
-                            border: "none",
-                            borderRadius: "4px",
+                            color: "white", border: "none", borderRadius: "4px",
                             cursor: isBatchSending ? "not-allowed" : "pointer",
-                            fontSize: "12px",
-                            fontWeight: "500"
+                            fontSize: "12px", fontWeight: "500"
                           }}
                         >
                           {isBatchSending ? `⏳ Sending ${selectedCount}...` : `📤 Send Selected (${selectedCount})`}
@@ -959,21 +1073,16 @@ export default function OrdersIndex() {
 
                     <div style={{ overflowX: "auto", width: "100%" }}>
                       <table style={{
-                        width: "100%",
-                        borderCollapse: "collapse",
-                        textAlign: "left",
-                        fontSize: "13px",
-                        minWidth: "1200px"
+                        width: "100%", borderCollapse: "collapse",
+                        textAlign: "left", fontSize: "13px", minWidth: "1400px"
                       }}>
                         <thead>
                           <tr>
-                            {['Select', 'Order', 'Customer', 'Email', 'Phone', 'Address', 'Items', 'Total', 'Delivery Date', 'Boxes', 'Action'].map(h => (
+                            {['Select', 'Order', 'Customer', 'Postcode', 'Postcode Status', 'Delivery Date', 'Boxes', 'Items', 'Total', 'Action'].map(h => (
                               <th key={h} style={{
                                 padding: "10px 6px",
                                 borderBottom: `1px solid ${THEME.border}`,
-                                fontWeight: "600",
-                                fontSize: "11px",
-                                color: THEME.textMuted,
+                                fontWeight: "600", fontSize: "11px", color: THEME.textMuted,
                                 whiteSpace: "nowrap",
                                 width: h === 'Select' ? "40px" : "auto"
                               }}>{h}</th>
@@ -988,11 +1097,17 @@ export default function OrdersIndex() {
                             const message = sendMessages[orderId] || '';
                             const sent = isOrderSent(orderId);
                             const sentDetails = getSentOrderDetails(orderId);
-
-                            const fullName = `${order.customer?.firstName || ''} ${order.customer?.lastName || ''}`.trim() || 'Guest';
+                            const validation = postcodeValidation[orderId] || { status: 'idle' };
                             const shipping = order.shippingAddress || {};
-                            const fullAddress = [shipping.address1, shipping.address2, shipping.city, shipping.provinceCode, shipping.zip].filter(Boolean).join(', ') || 'N/A';
+                            const postcode = (shipping.zip || '').trim();
+                            const fullName = `${order.customer?.firstName || ''} ${order.customer?.lastName || ''}`.trim() || 'Guest';
                             const itemCount = order.lineItems?.edges?.length || 0;
+
+                            // Determine if send is allowed
+                            const canSend = !sent && 
+                                           validation.status !== 'invalid' && 
+                                           validation.status !== 'checking' &&
+                                           validation.status !== 'no-postcode';
 
                             return (
                               <tr key={orderId || index}>
@@ -1001,9 +1116,8 @@ export default function OrdersIndex() {
                                     type="checkbox"
                                     checked={selectedOrders[orderId] || false}
                                     onChange={(e) => handleSelectOrder(orderId, e.target.checked)}
-                                    disabled={sent || isSending}
+                                    disabled={sent || isSending || validation.status === 'invalid'}
                                     style={{ width: "15px", height: "15px", accentColor: THEME.primary }}
-                                    title={sent ? "This order has already been sent" : ""}
                                   />
                                 </td>
                                 <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}` }}>
@@ -1012,36 +1126,88 @@ export default function OrdersIndex() {
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     style={{ color: THEME.primary, textDecoration: "none", fontWeight: "600" }}
-                                    onMouseEnter={(e) => { e.currentTarget.style.textDecoration = "underline"; }}
-                                    onMouseLeave={(e) => { e.currentTarget.style.textDecoration = "none"; }}
                                   >
                                     {order.name}
                                   </a>
+                                  <div style={{ fontSize: "11px", color: THEME.textMuted }}>
+                                    {fullName}
+                                  </div>
                                 </td>
-                                <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}` }}>{fullName}</td>
                                 <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}`, fontSize: "12px" }}>
                                   {order.customer?.email || 'N/A'}
                                 </td>
-                                <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}`, fontSize: "12px" }}>
-                                  {order.customer?.phone || shipping.phone || 'N/A'}
+                                <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}`, fontSize: "12px", fontWeight: "600" }}>
+                                  {postcode || <span style={{ color: THEME.danger }}>Missing</span>}
                                 </td>
-                                <td style={{
-                                  padding: "10px 6px",
-                                  borderBottom: `1px solid ${THEME.border}`,
-                                  fontSize: "12px",
-                                  maxWidth: "200px"
-                                }}>
-                                  <div style={{ wordBreak: "break-word" }}>{fullAddress}</div>
-                                </td>
-                                <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}`, fontSize: "12px" }}>
-                                  {itemCount} items
-                                </td>
-                                <td style={{
-                                  padding: "10px 6px",
-                                  borderBottom: `1px solid ${THEME.border}`,
-                                  fontWeight: "600"
-                                }}>
-                                  {order.totalPriceSet?.shopMoney?.amount || '0.00'} {order.totalPriceSet?.shopMoney?.currencyCode || 'USD'}
+                                <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}`, minWidth: "200px" }}>
+                                  {validation.status === 'checking' && (
+                                    <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: THEME.textMuted }}>
+                                      <div style={{
+                                        width: "12px", height: "12px",
+                                        border: `2px solid ${THEME.border}`,
+                                        borderTop: `2px solid ${THEME.primary}`,
+                                        borderRadius: "50%",
+                                        animation: "spin 1s linear infinite"
+                                      }} />
+                                      Checking...
+                                    </div>
+                                  )}
+
+                                  {validation.status === 'valid' && (
+                                    <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+                                      <span style={{
+                                        display: "inline-block", padding: "3px 8px",
+                                        backgroundColor: THEME.successLight, color: THEME.success,
+                                        border: `1px solid ${THEME.success}`, borderRadius: "4px",
+                                        fontSize: "11px", fontWeight: "600"
+                                      }}>
+                                        ✅ Deliverable
+                                      </span>
+                                      {validation.suburb && (
+                                        <div style={{ fontSize: "10px", color: THEME.textMuted }}>
+                                          {validation.suburb}{validation.run ? ` • ${validation.run}` : ''}
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+
+                                  {validation.status === 'invalid' && (
+                                    <div style={{
+                                      display: "flex", flexDirection: "column", gap: "3px",
+                                      padding: "6px 8px", backgroundColor: THEME.dangerLight,
+                                      border: `1px solid ${THEME.dangerBorder}`, borderRadius: "4px"
+                                    }}>
+                                      <span style={{ fontSize: "11px", fontWeight: "600", color: THEME.danger }}>
+                                        ❌ Not Deliverable
+                                      </span>
+                                      {validation.suburb && (
+                                        <div style={{ fontSize: "10px", color: THEME.textMuted }}>
+                                          {validation.suburb}{validation.run ? ` • ${validation.run}` : ''}
+                                        </div>
+                                      )}
+                                      <div style={{ fontSize: "10px", color: THEME.danger }}>
+                                        {validation.message}
+                                      </div>
+                                      {validation.nextAvailableDay && (
+                                        <div style={{ fontSize: "10px", color: THEME.success, fontWeight: "600" }}>
+                                          ✅ Next: {validation.nextAvailableDay}
+                                          {validation.nextAvailableDate ? ` (${validation.nextAvailableDate})` : ''}
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+
+                                  {validation.status === 'no-postcode' && (
+                                    <span style={{ fontSize: "11px", color: THEME.danger }}>
+                                      ⚠️ No postcode in order
+                                    </span>
+                                  )}
+
+                                  {validation.status === 'idle' && !postcode && (
+                                    <span style={{ fontSize: "11px", color: THEME.textMuted }}>
+                                      Waiting...
+                                    </span>
+                                  )}
                                 </td>
                                 <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}` }}>
                                   <input
@@ -1050,11 +1216,10 @@ export default function OrdersIndex() {
                                     onChange={(e) => updateDeliveryDate(orderId, e.target.value)}
                                     style={{
                                       padding: "5px 6px",
-                                      border: `1px solid ${THEME.primaryBorder}`,
-                                      borderRadius: "4px",
-                                      fontSize: "12px",
-                                      width: "130px",
-                                      color: THEME.textDark
+                                      border: `1px solid ${validation.status === 'invalid' ? THEME.danger : THEME.primaryBorder}`,
+                                      borderRadius: "4px", fontSize: "12px",
+                                      width: "130px", color: THEME.textDark,
+                                      backgroundColor: THEME.white
                                     }}
                                     disabled={sent || isSending}
                                   />
@@ -1069,66 +1234,69 @@ export default function OrdersIndex() {
                                     style={{
                                       padding: "5px 6px",
                                       border: `1px solid ${THEME.primaryBorder}`,
-                                      borderRadius: "4px",
-                                      fontSize: "12px",
-                                      width: "55px",
-                                      color: THEME.textDark
+                                      borderRadius: "4px", fontSize: "12px",
+                                      width: "55px", color: THEME.textDark,
+                                      backgroundColor: THEME.white
                                     }}
                                     disabled={sent || isSending}
                                   />
+                                </td>
+                                <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}`, fontSize: "12px" }}>
+                                  {itemCount}
+                                </td>
+                                <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}`, fontWeight: "600", fontSize: "12px" }}>
+                                  {order.totalPriceSet?.shopMoney?.amount || '0.00'} {order.totalPriceSet?.shopMoney?.currencyCode || 'USD'}
                                 </td>
                                 <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}` }}>
                                   {sent ? (
                                     <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
                                       <span style={{
-                                        display: "inline-block",
-                                        padding: "5px 12px",
-                                        backgroundColor: THEME.primaryLight,
-                                        color: THEME.primaryDark,
-                                        border: `1px solid ${THEME.primary}`,
-                                        borderRadius: "4px",
-                                        fontSize: "12px",
-                                        fontWeight: "600",
-                                        whiteSpace: "nowrap",
-                                        textAlign: "center"
+                                        display: "inline-block", padding: "5px 12px",
+                                        backgroundColor: THEME.successLight, color: THEME.success,
+                                        border: `1px solid ${THEME.success}`, borderRadius: "4px",
+                                        fontSize: "12px", fontWeight: "600",
+                                        whiteSpace: "nowrap", textAlign: "center"
                                       }}>
                                         ✅ Sent
                                       </span>
                                       <div style={{ fontSize: "9px", color: THEME.textMuted, textAlign: "center" }}>
                                         DO: {sentDetails?.doNumber || "N/A"}
                                       </div>
-                                      <div style={{ fontSize: "9px", color: THEME.textMuted, textAlign: "center" }}>
-                                        {sentDetails?.date} • {sentDetails?.boxes} box{sentDetails?.boxes > 1 ? "es" : ""}
-                                      </div>
                                     </div>
                                   ) : (
                                     <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
                                       <button
                                         onClick={() => sendToMealCart(order)}
-                                        disabled={isSending}
+                                        disabled={isSending || !canSend}
+                                        title={
+                                          validation.status === 'invalid' 
+                                            ? `Cannot send: ${validation.message}`
+                                            : validation.status === 'checking'
+                                            ? "Please wait — validating postcode"
+                                            : !canSend
+                                            ? "Cannot send this order"
+                                            : "Send to MealCart"
+                                        }
                                         style={{
                                           padding: "5px 12px",
-                                          backgroundColor: isError ? THEME.danger : THEME.primary,
-                                          color: "white",
-                                          border: "none",
+                                          backgroundColor: !canSend 
+                                            ? "#ccc" 
+                                            : isError 
+                                            ? THEME.danger 
+                                            : THEME.primary,
+                                          color: "white", border: "none",
                                           borderRadius: "4px",
-                                          cursor: isSending ? "not-allowed" : "pointer",
-                                          fontSize: "12px",
-                                          fontWeight: "500",
-                                          whiteSpace: "nowrap"
-                                        }}
-                                        onMouseEnter={(e) => {
-                                          if (!isSending) {
-                                            e.currentTarget.style.backgroundColor = isError ? "#9a060e" : THEME.primaryDark;
-                                          }
-                                        }}
-                                        onMouseLeave={(e) => {
-                                          if (!isSending) {
-                                            e.currentTarget.style.backgroundColor = isError ? THEME.danger : THEME.primary;
-                                          }
+                                          cursor: (!canSend || isSending) ? "not-allowed" : "pointer",
+                                          fontSize: "12px", fontWeight: "500",
+                                          whiteSpace: "nowrap",
+                                          opacity: !canSend ? 0.6 : 1
                                         }}
                                       >
-                                        {isSending ? "⏳ Sending..." : isError ? "⚠️ Retry" : "📤 Send"}
+                                        {isSending ? "⏳ Sending..." 
+                                          : validation.status === 'invalid' ? "🚫 Blocked"
+                                          : validation.status === 'checking' ? "⏳ Wait..."
+                                          : isError ? "⚠️ Retry" 
+                                          : "📤 Send"}
                                       </button>
                                       {message && (
                                         <div style={{
