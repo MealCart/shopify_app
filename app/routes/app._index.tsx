@@ -576,7 +576,7 @@ export default function OrdersIndex() {
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        background: `linear-gradient(135deg, ${THEME.primaryLight} 0%, ${THEME.primaryLighter} 100%)`,
+        backgroundColor: THEME.white,
         padding: "20px",
         boxSizing: "border-box"
       }}>
@@ -661,17 +661,15 @@ export default function OrdersIndex() {
                   boxSizing: "border-box",
                   outline: "none",
                   transition: "border-color 0.2s, box-shadow 0.2s",
-                  backgroundColor: "#f8fbfd"
+                  backgroundColor: THEME.white
                 }}
                 onFocus={(e) => {
                   e.target.style.borderColor = THEME.primary;
                   e.target.style.boxShadow = `0 0 0 3px rgba(45, 156, 219, 0.15)`;
-                  e.target.style.backgroundColor = THEME.white;
                 }}
                 onBlur={(e) => {
                   e.target.style.borderColor = THEME.primaryBorder;
                   e.target.style.boxShadow = "none";
-                  e.target.style.backgroundColor = "#f8fbfd";
                 }}
               />
             </div>
@@ -702,17 +700,15 @@ export default function OrdersIndex() {
                   boxSizing: "border-box",
                   outline: "none",
                   transition: "border-color 0.2s, box-shadow 0.2s",
-                  backgroundColor: "#f8fbfd"
+                  backgroundColor: THEME.white
                 }}
                 onFocus={(e) => {
                   e.target.style.borderColor = THEME.primary;
                   e.target.style.boxShadow = `0 0 0 3px rgba(45, 156, 219, 0.15)`;
-                  e.target.style.backgroundColor = THEME.white;
                 }}
                 onBlur={(e) => {
                   e.target.style.borderColor = THEME.primaryBorder;
                   e.target.style.boxShadow = "none";
-                  e.target.style.backgroundColor = "#f8fbfd";
                 }}
               />
             </div>
