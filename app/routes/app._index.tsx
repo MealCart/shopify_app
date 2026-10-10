@@ -48,12 +48,173 @@ const DAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const;
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const DAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-// ===== AUSTRALIAN STATES =====
-const AUSTRALIAN_STATES = [
-  "New South Wales", "Victoria", "Queensland",
-  "Western Australia", "South Australia", "Tasmania",
-  "Australian Capital Territory", "Northern Territory"
-];
+// ===== CUT-OFF TIME CONFIG =====
+const CUT_OFF_HOUR = 16; // 4 PM
+const CUT_OFF_MINUTE = 0;
+
+// ===== SERVER TIME CACHE =====
+let serverTimeCache: Date | null = null;
+let serverTimeFetchPromise: Promise<Date> | null = null;
+
+// ===== GET SERVER TIME (with caching + fallback) =====
+const getServerTimeSecure = async (): Promise<Date> => {
+  // Return cached time if less than 5 seconds old
+  if (serverTimeCache) {
+    const age = Date.now() - serverTimeCache.getTime();
+    if (age < 5000) {
+      return serverTimeCache;
+    }
+  }
+
+  // Wait for in-flight request
+  if (serverTimeFetchPromise) {
+    return serverTimeFetchPromise;
+  }
+
+  serverTimeFetchPromise = fetch("https://dtrack-backend-0zzv.onrender.com/api/time/server-time", {
+    method: "GET",
+    headers: { "Content-Type": "application/json" },
+    mode: "cors",
+  })
+    .then(async (response) => {
+      if (!response.ok) {
+        throw new Error(`Failed to fetch server time: ${response.status}`);
+      }
+      const data = await response.json();
+      const time = new Date(data.time);
+      serverTimeCache = time;
+      serverTimeFetchPromise = null;
+      console.log('✅ Server time fetched:', data.time);
+      return time;
+    })
+    .catch((error) => {
+      serverTimeFetchPromise = null;
+      console.error('❌ Failed to fetch server time, using device time as fallback:', error);
+      return new Date(); // Fallback to device time
+    });
+
+  return serverTimeFetchPromise;
+};
+
+// ===== GET AUSTRALIAN TIME (AEST/AEDT) =====
+const getAustralianTime = async (): Promise<{ date: Date; hour: number; minutes: number; dateStr: string }> => {
+  const serverTime = await getServerTimeSecure();
+
+  const formatter = new Intl.DateTimeFormat('en-AU', {
+    timeZone: 'Australia/Sydney',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  });
+
+  const parts = formatter.formatToParts(serverTime);
+
+  let day = '', month = '', year = '', hour = '', minute = '';
+  parts.forEach(part => {
+    if (part.type === 'day') day = part.value;
+    if (part.type === 'month') month = part.value;
+    if (part.type === 'year') year = part.value;
+    if (part.type === 'hour') hour = part.value;
+    if (part.type === 'minute') minute = part.value;
+  });
+
+  const ausDate = new Date(Date.UTC(parseInt(year), parseInt(month) - 1, parseInt(day)));
+  const ausHour = parseInt(hour);
+  const ausMinutes = parseInt(minute);
+
+  return {
+    date: ausDate,
+    hour: ausHour,
+    minutes: ausMinutes,
+    dateStr: `${year}-${month}-${day}`
+  };
+};
+
+// ===== CHECK IF PAST CUT-OFF (4 PM) =====
+const isPastCutOff = (hour: number, minutes: number): boolean => {
+  return hour > CUT_OFF_HOUR || (hour === CUT_OFF_HOUR && minutes > CUT_OFF_MINUTE);
+};
+
+// ===== GET MINIMUM ALLOWED DATE =====
+const getMinAllowedDate = async (): Promise<string> => {
+  const aus = await getAustralianTime();
+  const daysToAdd = isPastCutOff(aus.hour, aus.minutes) ? 2 : 1;
+  const targetDate = new Date(aus.date);
+  targetDate.setUTCDate(targetDate.getUTCDate() + daysToAdd);
+  return targetDate.toISOString().split('T')[0];
+};
+
+// ===== GET DATE INFO =====
+const getDateInfo = async () => {
+  const aus = await getAustralianTime();
+
+  const today = new Date(aus.date);
+  const tomorrow = new Date(today);
+  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+
+  const dayAfterTomorrow = new Date(today);
+  dayAfterTomorrow.setUTCDate(dayAfterTomorrow.getUTCDate() + 2);
+
+  const pastCutOff = isPastCutOff(aus.hour, aus.minutes);
+
+  return {
+    today: today.toISOString().split('T')[0],
+    tomorrow: tomorrow.toISOString().split('T')[0],
+    dayAfterTomorrow: dayAfterTomorrow.toISOString().split('T')[0],
+    isPastCutOff: pastCutOff,
+    tomorrowObj: tomorrow,
+    dayAfterTomorrowObj: dayAfterTomorrow,
+    currentHour: aus.hour,
+    currentMinutes: aus.minutes,
+  };
+};
+
+// ===== CHECK IF A DATE IS ALLOWED =====
+const isDateAllowed = async (dateStr: string): Promise<{ allowed: boolean; reason?: string }> => {
+  const info = await getDateInfo();
+
+  // TODAY - always allowed
+  if (dateStr === info.today) {
+    return { allowed: true };
+  }
+
+  // TOMORROW - only allowed if BEFORE 4 PM AEST
+  if (dateStr === info.tomorrow) {
+    if (!info.isPastCutOff) {
+      return { allowed: true };
+    } else {
+      const formattedDate = info.dayAfterTomorrowObj.toLocaleDateString('en-AU', {
+        timeZone: 'Australia/Sydney',
+        weekday: 'short', day: 'numeric', month: 'short', year: 'numeric'
+      });
+      return {
+        allowed: false,
+        reason: `Tomorrow is not available because it's past 4 PM (AEST time). Please select ${formattedDate} or later.`
+      };
+    }
+  }
+
+  // DAY AFTER TOMORROW or later - always allowed
+  return { allowed: true };
+};
+
+// ===== FORMAT DATE DISPLAY =====
+const formatDateDisplay = (dateStr: string): string => {
+  if (!dateStr) return 'N/A';
+  try {
+    const date = new Date(dateStr);
+    if (isNaN(date.getTime())) return dateStr;
+    return date.toLocaleDateString('en-AU', {
+      timeZone: 'Australia/Sydney',
+      weekday: 'short', day: 'numeric', month: 'short', year: 'numeric'
+    });
+  } catch (e) {
+    return dateStr;
+  }
+};
 
 // ===== LOADER =====
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -140,14 +301,23 @@ export default function OrdersIndex() {
   const [loginError, setLoginError] = useState<string | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
 
+  // ===== CUT-OFF TIME STATE =====
+  const [loadingTime, setLoadingTime] = useState(true);
+  const [minAllowedDate, setMinAllowedDate] = useState<string>("");
+  const [cutOffMessage, setCutOffMessage] = useState<string | null>(null);
+  const [isPastCutOff, setIsPastCutOff] = useState(false);
+  const [dateInfo, setDateInfo] = useState<{ isPastCutOff: boolean; tomorrow: string }>({
+    isPastCutOff: false,
+    tomorrow: "",
+  });
+
   // ===== DELIVERY STATE =====
   const [deliveryDates, setDeliveryDates] = useState<{ [key: string]: string }>({});
   const [boxCounts, setBoxCounts] = useState<{ [key: string]: number }>({});
   const [sendingStatus, setSendingStatus] = useState<{ [key: string]: 'idle' | 'sending' | 'success' | 'error' }>({});
   const [sendMessages, setSendMessages] = useState<{ [key: string]: string }>({});
 
-  // ===== ✏️ EDITED ADDRESS STATE =====
-  // Stores user-edited addresses per order. If not present, use Shopify's address.
+  // ===== EDITED ADDRESS STATE =====
   const [editedAddresses, setEditedAddresses] = useState<{
     [orderId: string]: {
       name: string;
@@ -161,17 +331,11 @@ export default function OrdersIndex() {
     }
   }>({});
 
-  // ===== ✏️ ADDRESS EDIT MODAL STATE =====
+  // ===== ADDRESS EDIT MODAL STATE =====
   const [editingOrder, setEditingOrder] = useState<any | null>(null);
   const [editForm, setEditForm] = useState({
-    name: '',
-    phone: '',
-    address1: '',
-    address2: '',
-    city: '',
-    provinceCode: '',
-    zip: '',
-    country: 'Australia',
+    name: '', phone: '', address1: '', address2: '', city: '',
+    provinceCode: '', zip: '', country: 'Australia',
   });
   const [editSaving, setEditSaving] = useState(false);
 
@@ -202,7 +366,7 @@ export default function OrdersIndex() {
   const [groupName, setGroupName] = useState<string | null>(null);
   const [userPrefix, setUserPrefix] = useState<string>("DO");
 
-  // ===== GET EFFECTIVE ADDRESS (edited or original) =====
+  // ===== GET EFFECTIVE ADDRESS =====
   const getEffectiveAddress = (order: any) => {
     const edited = editedAddresses[order.id];
     if (edited) return edited;
@@ -266,10 +430,49 @@ export default function OrdersIndex() {
     setEditSaving(false);
   };
 
-  // ===== CANCEL EDIT =====
   const cancelEdit = () => {
     setEditingOrder(null);
   };
+
+  // ===== INITIALIZE CUT-OFF TIME ON MOUNT =====
+  useEffect(() => {
+    const initializeDates = async () => {
+      setLoadingTime(true);
+      try {
+        const info = await getDateInfo();
+        const minDate = await getMinAllowedDate();
+        setMinAllowedDate(minDate);
+        setDateInfo({
+          isPastCutOff: info.isPastCutOff,
+          tomorrow: info.tomorrow,
+        });
+
+        if (info.isPastCutOff) {
+          setIsPastCutOff(true);
+          const formattedDate = formatDateDisplay(info.dayAfterTomorrow);
+          setCutOffMessage(
+            `⏰ It's past 4 PM (AEST time). The earliest available date is ${formattedDate} (day after tomorrow).`
+          );
+        } else {
+          setIsPastCutOff(false);
+          const formattedDate = formatDateDisplay(info.tomorrow);
+          setCutOffMessage(
+            `📅 Tomorrow (${formattedDate}) is available. Book before 4 PM (AEST time) for next-day delivery.`
+          );
+        }
+      } catch (error) {
+        console.error('❌ Failed to initialize dates:', error);
+        // Fallback: use device time
+        const fallbackDate = new Date().toISOString().split('T')[0];
+        setMinAllowedDate(fallbackDate);
+        setCutOffMessage('⚠️ Using device time. Please check your system clock.');
+      } finally {
+        setLoadingTime(false);
+      }
+    };
+
+    initializeDates();
+  }, []);
 
   // ===== LOAD FROM LOCALSTORAGE ON MOUNT =====
   useEffect(() => {
@@ -360,6 +563,7 @@ export default function OrdersIndex() {
     }
   };
 
+  // ===== HANDLE LOGOUT =====
   const handleLogout = () => {
     if (typeof window !== 'undefined') {
       localStorage.removeItem("auth_token");
@@ -388,19 +592,9 @@ export default function OrdersIndex() {
 
   // Set default delivery dates
   useEffect(() => {
-    if (!isLoggedIn) return;
+    if (!isLoggedIn || loadingTime) return;
 
-    const getDefaultDate = () => {
-      const now = new Date();
-      const hour = now.getHours();
-      const minutes = now.getMinutes();
-      const isPastCutOff = hour > 16 || (hour === 16 && minutes > 0);
-      const targetDate = new Date(now);
-      targetDate.setDate(targetDate.getDate() + (isPastCutOff ? 2 : 1));
-      return targetDate.toISOString().split('T')[0];
-    };
-
-    const defaultDate = getDefaultDate();
+    const defaultDate = minAllowedDate || new Date().toISOString().split('T')[0];
     const dates: { [key: string]: string } = {};
     const boxes: { [key: string]: number } = {};
     const selected: { [key: string]: boolean } = {};
@@ -419,7 +613,7 @@ export default function OrdersIndex() {
     setDeliveryDates(dates);
     setBoxCounts(boxes);
     setSelectedOrders(selected);
-  }, [orders, sentOrders, isLoggedIn]);
+  }, [orders, sentOrders, isLoggedIn, loadingTime, minAllowedDate]);
 
   // ===== POSTCODE VALIDATION (no 4-digit check) =====
   const validatePostcodeForOrder = async (orderId: string, postcode: string, dateStr: string) => {
@@ -536,17 +730,14 @@ export default function OrdersIndex() {
     }
   };
 
-  // ===== AUTO-VALIDATE — ✅ SKIPS ALREADY SENT ORDERS =====
+  // ===== AUTO-VALIDATE — SKIPS ALREADY SENT ORDERS =====
   useEffect(() => {
-    if (!isLoggedIn || orders.length === 0) return;
+    if (!isLoggedIn || orders.length === 0 || loadingTime) return;
 
     const timers: NodeJS.Timeout[] = [];
 
     orders.forEach(order => {
-      // ✅ Skip validation if order already sent
-      if (sentOrders[order.id]) {
-        return;
-      }
+      if (sentOrders[order.id]) return;
 
       const addr = getEffectiveAddress(order);
       const postcode = (addr.zip || '').trim();
@@ -568,7 +759,7 @@ export default function OrdersIndex() {
     return () => {
       timers.forEach(t => clearTimeout(t));
     };
-  }, [orders, deliveryDates, isLoggedIn, sentOrders, editedAddresses]);
+  }, [orders, deliveryDates, isLoggedIn, sentOrders, editedAddresses, loadingTime]);
 
   // ===== HELPERS =====
   const updateDeliveryDate = (orderId: string, date: string) => {
@@ -726,6 +917,16 @@ export default function OrdersIndex() {
       return;
     }
 
+    // ✅ NEW: Check date cut-off rule before sending
+    const deliveryDate = deliveryDates[orderId];
+    if (deliveryDate) {
+      const dateCheck = await isDateAllowed(deliveryDate);
+      if (!dateCheck.allowed) {
+        shopify.toast.show(`❌ ${dateCheck.reason}`);
+        return;
+      }
+    }
+
     const validation = postcodeValidation[orderId];
     if (validation?.status === 'invalid') {
       shopify.toast.show(`❌ Cannot send: ${validation.message}`);
@@ -743,7 +944,6 @@ export default function OrdersIndex() {
     try {
       const token = typeof window !== 'undefined' ? localStorage.getItem("auth_token") : null;
 
-      // ✅ Use edited address if user changed it
       const addr = getEffectiveAddress(order);
       const fullName = addr.name || 'Unknown';
       const email = order.customer?.email || '';
@@ -753,7 +953,6 @@ export default function OrdersIndex() {
       const lineItems = order.lineItems?.edges || [];
       const contents = lineItems.map((edge: any) => edge.node.title).join(', ');
 
-      const deliveryDate = deliveryDates[orderId] || new Date().toISOString().split('T')[0];
       const boxesCount = boxCounts[orderId] || 1;
       const orderNumber = order.name?.replace('#', '') || '0000';
       const timestamp = Date.now().toString().slice(-6);
@@ -764,7 +963,7 @@ export default function OrdersIndex() {
 
       const jobData = {
         do_number: doNumber,
-        date: deliveryDate,
+        date: deliveryDate || new Date().toISOString().split('T')[0],
         time_window: "07:00-18:00",
         address: fullAddress || addr.address1 || "Address not provided",
         deliver_to: fullName,
@@ -1008,7 +1207,8 @@ export default function OrdersIndex() {
     );
   }
 
-  if (isLoading) {
+  // ===== LOADING STATE (also waits for server time) =====
+  if (isLoading || loadingTime) {
     return (
       <div style={{ width: "100%", padding: "60px 20px", textAlign: "center" }}>
         <div style={{
@@ -1020,7 +1220,9 @@ export default function OrdersIndex() {
           margin: "0 auto 16px"
         }} />
         <style>{`@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }`}</style>
-        <h3 style={{ margin: "0 0 8px 0", color: THEME.textDark }}>Loading your orders...</h3>
+        <h3 style={{ margin: "0 0 8px 0", color: THEME.textDark }}>
+          {loadingTime ? "Getting server time..." : "Loading your orders..."}
+        </h3>
       </div>
     );
   }
@@ -1074,6 +1276,27 @@ export default function OrdersIndex() {
       </div>
 
       <div style={{ width: "100%", padding: "20px 24px", boxSizing: "border-box" }}>
+
+        {/* ✅ NEW: CUT-OFF TIME BANNER */}
+        {cutOffMessage && (
+          <div style={{
+            width: "100%",
+            padding: "12px 16px",
+            marginBottom: "16px",
+            backgroundColor: isPastCutOff ? THEME.warningLight : THEME.primaryLight,
+            border: `1px solid ${isPastCutOff ? THEME.warning : THEME.primaryBorder}`,
+            borderRadius: "8px",
+            color: isPastCutOff ? THEME.warning : THEME.textDark,
+            fontSize: "13px",
+            fontWeight: "500",
+            display: "flex",
+            alignItems: "center",
+            gap: "8px"
+          }}>
+            {cutOffMessage}
+          </div>
+        )}
+
         <div style={{
           width: "100%", backgroundColor: THEME.white,
           borderRadius: "8px", border: `1px solid ${THEME.border}`,
@@ -1193,10 +1416,19 @@ export default function OrdersIndex() {
                             const phone = addr.phone || 'N/A';
                             const itemCount = order.lineItems?.edges?.length || 0;
 
+                            // Check if selected date is past cut-off (client-side check for UI)
+                            const selectedDate = deliveryDates[orderId];
+                            const isDateBlocked = !!(
+                              selectedDate &&
+                              dateInfo.isPastCutOff &&
+                              selectedDate === dateInfo.tomorrow
+                            );
+
                             const canSend = !sent && 
                                            validation.status !== 'invalid' && 
                                            validation.status !== 'checking' &&
-                                           validation.status !== 'no-postcode';
+                                           validation.status !== 'no-postcode' &&
+                                           !isDateBlocked;
 
                             return (
                               <tr key={orderId || index}>
@@ -1205,7 +1437,7 @@ export default function OrdersIndex() {
                                     type="checkbox"
                                     checked={selectedOrders[orderId] || false}
                                     onChange={(e) => handleSelectOrder(orderId, e.target.checked)}
-                                    disabled={sent || isSending || validation.status === 'invalid'}
+                                    disabled={sent || isSending || validation.status === 'invalid' || isDateBlocked}
                                     style={{ width: "15px", height: "15px", accentColor: THEME.primary }}
                                   />
                                 </td>
@@ -1233,7 +1465,6 @@ export default function OrdersIndex() {
                                 <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}`, fontSize: "12px" }}>
                                   {phone}
                                 </td>
-                                {/* ✅ ADDRESS CELL WITH EDIT ICON */}
                                 <td style={{
                                   padding: "10px 6px",
                                   borderBottom: `1px solid ${THEME.border}`,
@@ -1272,7 +1503,6 @@ export default function OrdersIndex() {
                                         e.currentTarget.style.borderColor = THEME.primaryBorder;
                                       }}
                                     >
-                                      {/* Edit (pencil) SVG icon */}
                                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                         <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
                                         <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
@@ -1290,16 +1520,31 @@ export default function OrdersIndex() {
                                   <input
                                     type="date"
                                     value={deliveryDates[orderId] || ''}
+                                    min={minAllowedDate}
                                     onChange={(e) => updateDeliveryDate(orderId, e.target.value)}
                                     style={{
                                       padding: "5px 6px",
-                                      border: `1px solid ${validation.status === 'invalid' ? THEME.danger : THEME.primaryBorder}`,
+                                      border: `1px solid ${
+                                        isDateBlocked || validation.status === 'invalid' 
+                                          ? THEME.danger 
+                                          : THEME.primaryBorder
+                                      }`,
                                       borderRadius: "4px", fontSize: "12px",
                                       width: "130px", color: THEME.textDark,
-                                      backgroundColor: THEME.white
+                                      backgroundColor: isDateBlocked ? THEME.dangerLight : THEME.white
                                     }}
                                     disabled={sent || isSending}
                                   />
+                                  {isDateBlocked && !sent && (
+                                    <div style={{
+                                      fontSize: "10px",
+                                      color: THEME.danger,
+                                      marginTop: "3px",
+                                      fontWeight: "600"
+                                    }}>
+                                      ⏰ Past 4 PM — not available
+                                    </div>
+                                  )}
                                 </td>
                                 <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}` }}>
                                   <input
@@ -1318,7 +1563,6 @@ export default function OrdersIndex() {
                                     disabled={sent || isSending}
                                   />
                                 </td>
-                                {/* ✅ POSTCODE STATUS — SKIPS ALREADY SENT ORDERS */}
                                 <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}`, minWidth: "200px" }}>
                                   {sent ? (
                                     <span style={{ fontSize: "11px", color: THEME.textMuted }}>
@@ -1407,7 +1651,9 @@ export default function OrdersIndex() {
                                         onClick={() => sendToMealCart(order)}
                                         disabled={isSending || !canSend}
                                         title={
-                                          validation.status === 'invalid' 
+                                          isDateBlocked
+                                            ? "Tomorrow is not available — it's past 4 PM AEST"
+                                            : validation.status === 'invalid' 
                                             ? `Cannot send: ${validation.message}`
                                             : validation.status === 'checking'
                                             ? "Please wait — validating postcode"
@@ -1431,6 +1677,7 @@ export default function OrdersIndex() {
                                         }}
                                       >
                                         {isSending ? "⏳ Sending..." 
+                                          : isDateBlocked ? "⏰ Blocked"
                                           : validation.status === 'invalid' ? "🚫 Blocked"
                                           : validation.status === 'checking' ? "⏳ Wait..."
                                           : isError ? "⚠️ Retry" 
@@ -1462,7 +1709,7 @@ export default function OrdersIndex() {
         </div>
       </div>
 
-      {/* ===== ✏️ ADDRESS EDIT MODAL ===== */}
+      {/* ===== ADDRESS EDIT MODAL ===== */}
       {editingOrder && (
         <div
           style={{
@@ -1487,7 +1734,6 @@ export default function OrdersIndex() {
             boxShadow: "0 20px 60px rgba(0,0,0,0.3)",
             fontFamily: "'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
           }}>
-            {/* Header */}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "24px" }}>
               <div>
                 <h2 style={{ margin: "0 0 4px 0", fontSize: "20px", fontWeight: "600", color: THEME.textDark }}>
@@ -1514,7 +1760,6 @@ export default function OrdersIndex() {
               </button>
             </div>
 
-            {/* Info banner */}
             <div style={{
               padding: "10px 14px",
               backgroundColor: THEME.primaryLight,
@@ -1527,9 +1772,7 @@ export default function OrdersIndex() {
               💡 This edits the address for <strong>this delivery only</strong>. It will not update the original Shopify order.
             </div>
 
-            {/* Form */}
             <div style={{ display: "grid", gap: "16px" }}>
-              {/* Recipient Name */}
               <div>
                 <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: "500", color: THEME.textDark }}>
                   Recipient Name
@@ -1550,7 +1793,6 @@ export default function OrdersIndex() {
                 />
               </div>
 
-              {/* Phone */}
               <div>
                 <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: "500", color: THEME.textDark }}>
                   Phone Number
@@ -1572,7 +1814,6 @@ export default function OrdersIndex() {
                 />
               </div>
 
-              {/* Address Line 1 */}
               <div>
                 <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: "500", color: THEME.textDark }}>
                   Address Line 1
@@ -1594,7 +1835,6 @@ export default function OrdersIndex() {
                 />
               </div>
 
-              {/* Address Line 2 */}
               <div>
                 <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: "500", color: THEME.textDark }}>
                   Address Line 2 <span style={{ color: THEME.textMuted, fontWeight: "400" }}>(optional)</span>
@@ -1616,7 +1856,6 @@ export default function OrdersIndex() {
                 />
               </div>
 
-              {/* City + State */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
                 <div>
                   <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: "500", color: THEME.textDark }}>
@@ -1667,7 +1906,6 @@ export default function OrdersIndex() {
                 </div>
               </div>
 
-              {/* Postcode + Country */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
                 <div>
                   <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: "500", color: THEME.textDark }}>
@@ -1691,7 +1929,8 @@ export default function OrdersIndex() {
                 </div>
                 <div>
                   <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: "500", color: THEME.textDark }}>
-                    Country                  </label>
+                    Country
+                  </label>
                   <input
                     type="text"
                     value={editForm.country}
@@ -1710,7 +1949,6 @@ export default function OrdersIndex() {
               </div>
             </div>
 
-            {/* Footer */}
             <div style={{ display: "flex", gap: "12px", justifyContent: "flex-end", marginTop: "24px" }}>
               <button
                 onClick={cancelEdit}
