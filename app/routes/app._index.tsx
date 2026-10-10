@@ -662,7 +662,7 @@ export default function OrdersIndex() {
           </form>
 
           <div style={{ marginTop: "24px", textAlign: "center", fontSize: "13px", color: "#6d7175" }}>
-            Contact your administrator if you need an account
+            Please Contact your administrator if you need an account
           </div>
         </div>
       </div>
