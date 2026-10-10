@@ -22,6 +22,26 @@ const LABEL_SIZES = [
 const STORAGE_KEY = 'shopify_label_size';
 const SENT_ORDERS_KEY = 'shopify_sent_orders';
 
+// ===== THEME COLORS =====
+const THEME = {
+  primary: "#2d9cdb",
+  primaryDark: "#1e88c7",
+  primaryLight: "#e8f4f8",
+  primaryLighter: "#d4e9f2",
+  primaryPale: "#f0f8fc",
+  primaryBorder: "#c9d9e3",
+  textDark: "#1a1a2e",
+  textMuted: "#6b7c8c",
+  textLight: "#8a9ba8",
+  danger: "#bf0711",
+  dangerLight: "#fde7e7",
+  dangerBorder: "#f5c2c7",
+  warning: "#b98900",
+  warningLight: "#fef3e4",
+  white: "#ffffff",
+  border: "#e1e3e5",
+};
+
 // ===== LOADER =====
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin } = await authenticate.admin(request);
@@ -128,7 +148,6 @@ export default function OrdersIndex() {
   // ===== LOAD FROM LOCALSTORAGE ON MOUNT =====
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      // Check if user is already logged in
       const token = localStorage.getItem("auth_token");
       const userData = localStorage.getItem("user");
 
@@ -159,7 +178,6 @@ export default function OrdersIndex() {
     setIsLoggingIn(true);
 
     try {
-      // ✅ Call your backend login API
       const response = await fetch("https://dtrack-backend-0zzv.onrender.com/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -169,11 +187,9 @@ export default function OrdersIndex() {
       const data = await response.json();
 
       if (response.ok && data.success) {
-        // ✅ Store token and user data in localStorage
         localStorage.setItem("auth_token", data.token);
         localStorage.setItem("user", JSON.stringify(data.user));
 
-        // ✅ Update state to show dashboard (NO redirect!)
         setGroupId(data.user?.groupId || data.user?.group_id || null);
         setGroupName(data.user?.groupName || data.user?.group_name || null);
         setUserPrefix(data.user?.prefix || "DO");
@@ -415,7 +431,6 @@ export default function OrdersIndex() {
   const sendToMealCart = async (order: any) => {
     const orderId = order.id;
 
-    // Guard: don't send if already sent
     if (isOrderSent(orderId)) {
       shopify.toast.show("This order has already been sent");
       return;
@@ -502,7 +517,6 @@ export default function OrdersIndex() {
   };
 
   const sendBatchToMealCart = async (groupKey: string, groupOrders: any[]) => {
-    // Exclude orders that were already sent
     const selectedOrderIds = getSelectedOrderIds(groupOrders).filter(id => !isOrderSent(id));
     if (selectedOrderIds.length === 0) {
       shopify.toast.show("No unsent orders selected");
@@ -562,25 +576,47 @@ export default function OrdersIndex() {
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        backgroundColor: "#f6f7f8",
+        background: `linear-gradient(135deg, ${THEME.primaryLight} 0%, ${THEME.primaryLighter} 100%)`,
         padding: "20px",
         boxSizing: "border-box"
       }}>
         <div style={{
           width: "100%",
-          maxWidth: "400px",
-          backgroundColor: "#ffffff",
-          borderRadius: "8px",
-          padding: "40px 32px",
-          boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
+          maxWidth: "420px",
+          backgroundColor: THEME.white,
+          borderRadius: "12px",
+          padding: "48px 36px",
+          boxShadow: "0 10px 30px rgba(45, 156, 219, 0.15)",
           fontFamily: "'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
         }}>
+          {/* Logo */}
+          <div style={{ textAlign: "center", marginBottom: "24px" }}>
+            <img
+              src="https://www.mealcart.com.au/assets/img/logo.png"
+              alt="MealCart Logo"
+              style={{
+                maxWidth: "180px",
+                maxHeight: "80px",
+                objectFit: "contain",
+                display: "inline-block"
+              }}
+            />
+          </div>
+
           <div style={{ textAlign: "center", marginBottom: "32px" }}>
-            <div style={{ fontSize: "48px", marginBottom: "12px" }}>🔐</div>
-            <h2 style={{ margin: "0 0 8px 0", color: "#202223", fontSize: "24px" }}>
-              MealCart Login
+            <h2 style={{
+              margin: "0 0 8px 0",
+              color: THEME.textDark,
+              fontSize: "24px",
+              fontWeight: "600"
+            }}>
+              Welcome Back
             </h2>
-            <p style={{ margin: "0", color: "#6d7175", fontSize: "14px" }}>
+            <p style={{
+              margin: "0",
+              color: THEME.textMuted,
+              fontSize: "14px"
+            }}>
               Sign in to your MealCart account
             </p>
           </div>
@@ -588,10 +624,11 @@ export default function OrdersIndex() {
           {loginError && (
             <div style={{
               padding: "12px",
-              backgroundColor: "#fde7e7",
-              borderRadius: "4px",
-              marginBottom: "16px",
-              color: "#bf0711",
+              backgroundColor: THEME.dangerLight,
+              border: `1px solid ${THEME.dangerBorder}`,
+              borderRadius: "8px",
+              marginBottom: "20px",
+              color: THEME.danger,
               fontSize: "14px"
             }}>
               {loginError}
@@ -599,8 +636,14 @@ export default function OrdersIndex() {
           )}
 
           <form onSubmit={handleLogin}>
-            <div style={{ marginBottom: "16px" }}>
-              <label style={{ display: "block", marginBottom: "4px", fontWeight: "500", fontSize: "14px", color: "#202223" }}>
+            <div style={{ marginBottom: "18px" }}>
+              <label style={{
+                display: "block",
+                marginBottom: "6px",
+                fontWeight: "500",
+                fontSize: "14px",
+                color: THEME.textDark
+              }}>
                 Email
               </label>
               <input
@@ -611,17 +654,36 @@ export default function OrdersIndex() {
                 placeholder="you@example.com"
                 style={{
                   width: "100%",
-                  padding: "10px 12px",
-                  border: "1px solid #d1d2d4",
-                  borderRadius: "4px",
+                  padding: "12px 14px",
+                  border: `1px solid ${THEME.primaryBorder}`,
+                  borderRadius: "8px",
                   fontSize: "14px",
-                  boxSizing: "border-box"
+                  boxSizing: "border-box",
+                  outline: "none",
+                  transition: "border-color 0.2s, box-shadow 0.2s",
+                  backgroundColor: "#f8fbfd"
+                }}
+                onFocus={(e) => {
+                  e.target.style.borderColor = THEME.primary;
+                  e.target.style.boxShadow = `0 0 0 3px rgba(45, 156, 219, 0.15)`;
+                  e.target.style.backgroundColor = THEME.white;
+                }}
+                onBlur={(e) => {
+                  e.target.style.borderColor = THEME.primaryBorder;
+                  e.target.style.boxShadow = "none";
+                  e.target.style.backgroundColor = "#f8fbfd";
                 }}
               />
             </div>
 
-            <div style={{ marginBottom: "24px" }}>
-              <label style={{ display: "block", marginBottom: "4px", fontWeight: "500", fontSize: "14px", color: "#202223" }}>
+            <div style={{ marginBottom: "28px" }}>
+              <label style={{
+                display: "block",
+                marginBottom: "6px",
+                fontWeight: "500",
+                fontSize: "14px",
+                color: THEME.textDark
+              }}>
                 Password
               </label>
               <input
@@ -633,11 +695,24 @@ export default function OrdersIndex() {
                 minLength={6}
                 style={{
                   width: "100%",
-                  padding: "10px 12px",
-                  border: "1px solid #d1d2d4",
-                  borderRadius: "4px",
+                  padding: "12px 14px",
+                  border: `1px solid ${THEME.primaryBorder}`,
+                  borderRadius: "8px",
                   fontSize: "14px",
-                  boxSizing: "border-box"
+                  boxSizing: "border-box",
+                  outline: "none",
+                  transition: "border-color 0.2s, box-shadow 0.2s",
+                  backgroundColor: "#f8fbfd"
+                }}
+                onFocus={(e) => {
+                  e.target.style.borderColor = THEME.primary;
+                  e.target.style.boxShadow = `0 0 0 3px rgba(45, 156, 219, 0.15)`;
+                  e.target.style.backgroundColor = THEME.white;
+                }}
+                onBlur={(e) => {
+                  e.target.style.borderColor = THEME.primaryBorder;
+                  e.target.style.boxShadow = "none";
+                  e.target.style.backgroundColor = "#f8fbfd";
                 }}
               />
             </div>
@@ -647,22 +722,43 @@ export default function OrdersIndex() {
               disabled={isLoggingIn}
               style={{
                 width: "100%",
-                padding: "12px",
-                backgroundColor: isLoggingIn ? "#6d7175" : "#006e52",
+                padding: "14px",
+                background: isLoggingIn
+                  ? "#a8c8dc"
+                  : `linear-gradient(135deg, ${THEME.primary} 0%, ${THEME.primaryDark} 100%)`,
                 color: "white",
                 border: "none",
-                borderRadius: "4px",
+                borderRadius: "8px",
                 fontSize: "16px",
                 fontWeight: "600",
-                cursor: isLoggingIn ? "not-allowed" : "pointer"
+                cursor: isLoggingIn ? "not-allowed" : "pointer",
+                boxShadow: isLoggingIn ? "none" : "0 4px 12px rgba(45, 156, 219, 0.3)",
+                transition: "transform 0.15s, box-shadow 0.15s"
+              }}
+              onMouseEnter={(e) => {
+                if (!isLoggingIn) {
+                  e.currentTarget.style.transform = "translateY(-1px)";
+                  e.currentTarget.style.boxShadow = "0 6px 16px rgba(45, 156, 219, 0.4)";
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (!isLoggingIn) {
+                  e.currentTarget.style.transform = "translateY(0)";
+                  e.currentTarget.style.boxShadow = "0 4px 12px rgba(45, 156, 219, 0.3)";
+                }
               }}
             >
               {isLoggingIn ? "Logging in..." : "Login"}
             </button>
           </form>
 
-          <div style={{ marginTop: "24px", textAlign: "center", fontSize: "13px", color: "#6d7175" }}>
-            Please Contact your administrator if you need an account
+          <div style={{
+            marginTop: "28px",
+            textAlign: "center",
+            fontSize: "13px",
+            color: THEME.textLight
+          }}>
+            Please contact your administrator if you need an account
           </div>
         </div>
       </div>
@@ -673,9 +769,17 @@ export default function OrdersIndex() {
   if (isLoading) {
     return (
       <div style={{ width: "100%", padding: "60px 20px", textAlign: "center" }}>
-        <div style={{ width: "40px", height: "40px", border: "4px solid #e1e3e5", borderTop: "4px solid #006e52", borderRadius: "50%", animation: "spin 1s linear infinite", margin: "0 auto 16px" }} />
+        <div style={{
+          width: "40px",
+          height: "40px",
+          border: `4px solid ${THEME.border}`,
+          borderTop: `4px solid ${THEME.primary}`,
+          borderRadius: "50%",
+          animation: "spin 1s linear infinite",
+          margin: "0 auto 16px"
+        }} />
         <style>{`@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }`}</style>
-        <h3 style={{ margin: "0 0 8px 0" }}>Loading your orders...</h3>
+        <h3 style={{ margin: "0 0 8px 0", color: THEME.textDark }}>Loading your orders...</h3>
       </div>
     );
   }
@@ -684,14 +788,50 @@ export default function OrdersIndex() {
   return (
     <div style={{ width: "100%", maxWidth: "100%", padding: 0, margin: 0, overflowX: "hidden" }}>
       {/* Header */}
-      <div style={{ width: "100%", backgroundColor: "#ffffff", borderBottom: "1px solid #e1e3e5", padding: "16px 24px", boxSizing: "border-box", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "8px" }}>
-        <h1 style={{ margin: 0, fontSize: "20px", fontWeight: "600", color: "#202223", fontFamily: "'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" }}>
-          📦 Shopify Orders
-        </h1>
+      <div style={{
+        width: "100%",
+        backgroundColor: THEME.white,
+        borderBottom: `1px solid ${THEME.border}`,
+        padding: "16px 24px",
+        boxSizing: "border-box",
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        flexWrap: "wrap",
+        gap: "8px"
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+          <img
+            src="https://www.mealcart.com.au/assets/img/logo.png"
+            alt="MealCart"
+            style={{ height: "32px", objectFit: "contain" }}
+          />
+          <h1 style={{
+            margin: 0,
+            fontSize: "20px",
+            fontWeight: "600",
+            color: THEME.textDark,
+            fontFamily: "'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+          }}>
+            📦 Shopify Orders
+          </h1>
+        </div>
         <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <span style={{ fontSize: "12px", color: "#6d7175" }}>Labels:</span>
-            <select value={selectedLabelSize} onChange={(e) => setSelectedLabelSize(e.target.value)} style={{ padding: "5px 10px", border: "1px solid #d1d2d4", borderRadius: "4px", fontSize: "12px", backgroundColor: "#ffffff", cursor: "pointer" }}>
+            <span style={{ fontSize: "12px", color: THEME.textMuted }}>Labels:</span>
+            <select
+              value={selectedLabelSize}
+              onChange={(e) => setSelectedLabelSize(e.target.value)}
+              style={{
+                padding: "5px 10px",
+                border: `1px solid ${THEME.primaryBorder}`,
+                borderRadius: "4px",
+                fontSize: "12px",
+                backgroundColor: THEME.white,
+                cursor: "pointer",
+                color: THEME.textDark
+              }}
+            >
               {LABEL_SIZES.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
             </select>
           </div>
@@ -699,7 +839,7 @@ export default function OrdersIndex() {
             onClick={handleLogout}
             style={{
               padding: "8px 20px",
-              backgroundColor: "#bf0711",
+              backgroundColor: THEME.primary,
               color: "white",
               border: "none",
               borderRadius: "4px",
@@ -707,6 +847,8 @@ export default function OrdersIndex() {
               fontSize: "14px",
               fontWeight: "500"
             }}
+            onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = THEME.primaryDark; }}
+            onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = THEME.primary; }}
           >
             Logout
           </button>
@@ -715,11 +857,31 @@ export default function OrdersIndex() {
 
       {/* Content */}
       <div style={{ width: "100%", padding: "20px 24px", boxSizing: "border-box" }}>
-        <div style={{ width: "100%", backgroundColor: "#ffffff", borderRadius: "8px", border: "1px solid #e1e3e5", padding: "20px 24px", boxSizing: "border-box" }}>
-          <h3 style={{ margin: "0 0 16px 0", fontSize: "16px", fontWeight: "600", color: "#202223" }}>Recent Orders</h3>
+        <div style={{
+          width: "100%",
+          backgroundColor: THEME.white,
+          borderRadius: "8px",
+          border: `1px solid ${THEME.border}`,
+          padding: "20px 24px",
+          boxSizing: "border-box"
+        }}>
+          <h3 style={{
+            margin: "0 0 16px 0",
+            fontSize: "16px",
+            fontWeight: "600",
+            color: THEME.textDark
+          }}>
+            Recent Orders
+          </h3>
 
           {error && (
-            <div style={{ padding: "12px", backgroundColor: "#fde7e7", borderRadius: "4px", marginBottom: "16px", color: "#bf0711" }}>
+            <div style={{
+              padding: "12px",
+              backgroundColor: THEME.dangerLight,
+              borderRadius: "4px",
+              marginBottom: "16px",
+              color: THEME.danger
+            }}>
               <strong>Error:</strong> {error}
             </div>
           )}
@@ -727,44 +889,98 @@ export default function OrdersIndex() {
           {orders.length === 0 && !error ? (
             <div style={{ textAlign: "center", padding: "40px 20px" }}>
               <div style={{ fontSize: "48px", marginBottom: "16px" }}>📦</div>
-              <h3 style={{ margin: "0 0 8px 0" }}>No orders yet</h3>
-              <p style={{ margin: 0, color: "#6d7175" }}>Check back later!</p>
+              <h3 style={{ margin: "0 0 8px 0", color: THEME.textDark }}>No orders yet</h3>
+              <p style={{ margin: 0, color: THEME.textMuted }}>Check back later!</p>
             </div>
           ) : orders.length > 0 ? (
             <div style={{ width: "100%" }}>
               {groupedOrders.map((group) => {
                 const groupKey = group.date;
                 const allSelected = areAllSelected(group.orders);
-                const anySelected = areAnySelected(group.orders);
                 const selectedCount = getSelectedOrderIds(group.orders).filter(id => !isOrderSent(id)).length;
                 const isBatchSending = batchSending[groupKey] || false;
 
                 return (
                   <div key={groupKey} style={{ marginBottom: "32px" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px", borderBottom: "1px solid #e1e3e5", paddingBottom: "8px", flexWrap: "wrap", gap: "8px" }}>
+                    <div style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      marginBottom: "12px",
+                      borderBottom: `1px solid ${THEME.border}`,
+                      paddingBottom: "8px",
+                      flexWrap: "wrap",
+                      gap: "8px"
+                    }}>
                       <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                        <input type="checkbox" checked={allSelected} onChange={(e) => handleSelectAll(groupKey, e.target.checked, group.orders)} style={{ width: "16px", height: "16px", cursor: "pointer" }} />
-                        <h4 style={{ margin: 0, fontSize: "15px", fontWeight: "600", color: "#202223" }}>
+                        <input
+                          type="checkbox"
+                          checked={allSelected}
+                          onChange={(e) => handleSelectAll(groupKey, e.target.checked, group.orders)}
+                          style={{ width: "16px", height: "16px", cursor: "pointer", accentColor: THEME.primary }}
+                        />
+                        <h4 style={{
+                          margin: 0,
+                          fontSize: "15px",
+                          fontWeight: "600",
+                          color: THEME.textDark
+                        }}>
                           {getDateGroupName(groupKey)}
-                          <span style={{ fontSize: "13px", fontWeight: "400", color: "#6d7175", marginLeft: "8px" }}>
+                          <span style={{
+                            fontSize: "13px",
+                            fontWeight: "400",
+                            color: THEME.textMuted,
+                            marginLeft: "8px"
+                          }}>
                             ({group.orders.length} order{group.orders.length > 1 ? 's' : ''})
                           </span>
-                          {selectedCount > 0 && <span style={{ fontSize: "12px", color: "#b98900", marginLeft: "8px" }}>• {selectedCount} selected</span>}
+                          {selectedCount > 0 && (
+                            <span style={{ fontSize: "12px", color: THEME.warning, marginLeft: "8px" }}>
+                              • {selectedCount} selected
+                            </span>
+                          )}
                         </h4>
                       </div>
                       {selectedCount > 0 && (
-                        <button onClick={() => sendBatchToMealCart(groupKey, group.orders)} disabled={isBatchSending} style={{ padding: "6px 16px", backgroundColor: isBatchSending ? "#6d7175" : "#006e52", color: "white", border: "none", borderRadius: "4px", cursor: isBatchSending ? "not-allowed" : "pointer", fontSize: "12px", fontWeight: "500" }}>
+                        <button
+                          onClick={() => sendBatchToMealCart(groupKey, group.orders)}
+                          disabled={isBatchSending}
+                          style={{
+                            padding: "6px 16px",
+                            backgroundColor: isBatchSending ? THEME.textLight : THEME.primary,
+                            color: "white",
+                            border: "none",
+                            borderRadius: "4px",
+                            cursor: isBatchSending ? "not-allowed" : "pointer",
+                            fontSize: "12px",
+                            fontWeight: "500"
+                          }}
+                        >
                           {isBatchSending ? `⏳ Sending ${selectedCount}...` : `📤 Send Selected (${selectedCount})`}
                         </button>
                       )}
                     </div>
 
                     <div style={{ overflowX: "auto", width: "100%" }}>
-                      <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: "13px", minWidth: "1200px" }}>
+                      <table style={{
+                        width: "100%",
+                        borderCollapse: "collapse",
+                        textAlign: "left",
+                        fontSize: "13px",
+                        minWidth: "1200px"
+                      }}>
                         <thead>
                           <tr>
                             {['Select', 'Order', 'Customer', 'Email', 'Phone', 'Address', 'Items', 'Total', 'Delivery Date', 'Boxes', 'Action'].map(h => (
-                              <th key={h} style={{ padding: "10px 6px", borderBottom: "1px solid #e1e3e5", fontWeight: "600", fontSize: "11px", color: "#6d7175", whiteSpace: "nowrap", width: h === 'Select' ? "40px" : "auto" }}>{h}</th>
+                              <th key={h} style={{
+                                padding: "10px 6px",
+                                borderBottom: `1px solid ${THEME.border}`,
+                                fontWeight: "600",
+                                fontSize: "11px",
+                                color: THEME.textMuted,
+                                whiteSpace: "nowrap",
+                                width: h === 'Select' ? "40px" : "auto"
+                              }}>{h}</th>
                             ))}
                           </tr>
                         </thead>
@@ -772,7 +988,6 @@ export default function OrdersIndex() {
                           {group.orders.map((order: any, index: number) => {
                             const orderId = order.id;
                             const isSending = sendingStatus[orderId] === 'sending';
-                            const isSuccess = sendingStatus[orderId] === 'success';
                             const isError = sendingStatus[orderId] === 'error';
                             const message = sendMessages[orderId] || '';
                             const sent = isOrderSent(orderId);
@@ -785,61 +1000,96 @@ export default function OrdersIndex() {
 
                             return (
                               <tr key={orderId || index}>
-                                <td style={{ padding: "10px 6px", borderBottom: "1px solid #e1e3e5" }}>
+                                <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}` }}>
                                   <input
                                     type="checkbox"
                                     checked={selectedOrders[orderId] || false}
                                     onChange={(e) => handleSelectOrder(orderId, e.target.checked)}
                                     disabled={sent || isSending}
-                                    style={{ width: "15px", height: "15px" }}
+                                    style={{ width: "15px", height: "15px", accentColor: THEME.primary }}
                                     title={sent ? "This order has already been sent" : ""}
                                   />
                                 </td>
-                                <td style={{ padding: "10px 6px", borderBottom: "1px solid #e1e3e5" }}>
-                                  <a href={`https://admin.shopify.com/apps/orders/${orderId?.split('/').pop()}`} target="_blank" rel="noopener noreferrer" style={{ color: "#006e52", textDecoration: "none", fontWeight: "600" }}>
+                                <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}` }}>
+                                  <a
+                                    href={`https://admin.shopify.com/apps/orders/${orderId?.split('/').pop()}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    style={{ color: THEME.primary, textDecoration: "none", fontWeight: "600" }}
+                                    onMouseEnter={(e) => { e.currentTarget.style.textDecoration = "underline"; }}
+                                    onMouseLeave={(e) => { e.currentTarget.style.textDecoration = "none"; }}
+                                  >
                                     {order.name}
                                   </a>
                                 </td>
-                                <td style={{ padding: "10px 6px", borderBottom: "1px solid #e1e3e5" }}>{fullName}</td>
-                                <td style={{ padding: "10px 6px", borderBottom: "1px solid #e1e3e5", fontSize: "12px" }}>{order.customer?.email || 'N/A'}</td>
-                                <td style={{ padding: "10px 6px", borderBottom: "1px solid #e1e3e5", fontSize: "12px" }}>{order.customer?.phone || shipping.phone || 'N/A'}</td>
-                                <td style={{ padding: "10px 6px", borderBottom: "1px solid #e1e3e5", fontSize: "12px", maxWidth: "200px" }}>
+                                <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}` }}>{fullName}</td>
+                                <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}`, fontSize: "12px" }}>
+                                  {order.customer?.email || 'N/A'}
+                                </td>
+                                <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}`, fontSize: "12px" }}>
+                                  {order.customer?.phone || shipping.phone || 'N/A'}
+                                </td>
+                                <td style={{
+                                  padding: "10px 6px",
+                                  borderBottom: `1px solid ${THEME.border}`,
+                                  fontSize: "12px",
+                                  maxWidth: "200px"
+                                }}>
                                   <div style={{ wordBreak: "break-word" }}>{fullAddress}</div>
                                 </td>
-                                <td style={{ padding: "10px 6px", borderBottom: "1px solid #e1e3e5", fontSize: "12px" }}>{itemCount} items</td>
-                                <td style={{ padding: "10px 6px", borderBottom: "1px solid #e1e3e5", fontWeight: "600" }}>
+                                <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}`, fontSize: "12px" }}>
+                                  {itemCount} items
+                                </td>
+                                <td style={{
+                                  padding: "10px 6px",
+                                  borderBottom: `1px solid ${THEME.border}`,
+                                  fontWeight: "600"
+                                }}>
                                   {order.totalPriceSet?.shopMoney?.amount || '0.00'} {order.totalPriceSet?.shopMoney?.currencyCode || 'USD'}
                                 </td>
-                                <td style={{ padding: "10px 6px", borderBottom: "1px solid #e1e3e5" }}>
+                                <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}` }}>
                                   <input
                                     type="date"
                                     value={deliveryDates[orderId] || ''}
                                     onChange={(e) => updateDeliveryDate(orderId, e.target.value)}
-                                    style={{ padding: "5px 6px", border: "1px solid #d1d2d4", borderRadius: "4px", fontSize: "12px", width: "130px" }}
+                                    style={{
+                                      padding: "5px 6px",
+                                      border: `1px solid ${THEME.primaryBorder}`,
+                                      borderRadius: "4px",
+                                      fontSize: "12px",
+                                      width: "130px",
+                                      color: THEME.textDark
+                                    }}
                                     disabled={sent || isSending}
                                   />
                                 </td>
-                                <td style={{ padding: "10px 6px", borderBottom: "1px solid #e1e3e5" }}>
+                                <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}` }}>
                                   <input
                                     type="number"
                                     min="1"
                                     max="100"
                                     value={boxCounts[orderId] || 1}
                                     onChange={(e) => updateBoxCount(orderId, parseInt(e.target.value) || 1)}
-                                    style={{ padding: "5px 6px", border: "1px solid #d1d2d4", borderRadius: "4px", fontSize: "12px", width: "55px" }}
+                                    style={{
+                                      padding: "5px 6px",
+                                      border: `1px solid ${THEME.primaryBorder}`,
+                                      borderRadius: "4px",
+                                      fontSize: "12px",
+                                      width: "55px",
+                                      color: THEME.textDark
+                                    }}
                                     disabled={sent || isSending}
                                   />
                                 </td>
-                                <td style={{ padding: "10px 6px", borderBottom: "1px solid #e1e3e5" }}>
+                                <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}` }}>
                                   {sent ? (
-                                    // Already sent — locked, no resend option
                                     <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
                                       <span style={{
                                         display: "inline-block",
                                         padding: "5px 12px",
-                                        backgroundColor: "#e3f1df",
-                                        color: "#006e52",
-                                        border: "1px solid #006e52",
+                                        backgroundColor: THEME.primaryLight,
+                                        color: THEME.primaryDark,
+                                        border: `1px solid ${THEME.primary}`,
                                         borderRadius: "4px",
                                         fontSize: "12px",
                                         fontWeight: "600",
@@ -848,22 +1098,21 @@ export default function OrdersIndex() {
                                       }}>
                                         ✅ Sent
                                       </span>
-                                      <div style={{ fontSize: "9px", color: "#6d7175", textAlign: "center" }}>
+                                      <div style={{ fontSize: "9px", color: THEME.textMuted, textAlign: "center" }}>
                                         DO: {sentDetails?.doNumber || "N/A"}
                                       </div>
-                                      <div style={{ fontSize: "9px", color: "#6d7175", textAlign: "center" }}>
+                                      <div style={{ fontSize: "9px", color: THEME.textMuted, textAlign: "center" }}>
                                         {sentDetails?.date} • {sentDetails?.boxes} box{sentDetails?.boxes > 1 ? "es" : ""}
                                       </div>
                                     </div>
                                   ) : (
-                                    // Not sent yet — show send button
                                     <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
                                       <button
                                         onClick={() => sendToMealCart(order)}
                                         disabled={isSending}
                                         style={{
                                           padding: "5px 12px",
-                                          backgroundColor: isError ? "#bf0711" : "#006e52",
+                                          backgroundColor: isError ? THEME.danger : THEME.primary,
                                           color: "white",
                                           border: "none",
                                           borderRadius: "4px",
@@ -872,13 +1121,23 @@ export default function OrdersIndex() {
                                           fontWeight: "500",
                                           whiteSpace: "nowrap"
                                         }}
+                                        onMouseEnter={(e) => {
+                                          if (!isSending) {
+                                            e.currentTarget.style.backgroundColor = isError ? "#9a060e" : THEME.primaryDark;
+                                          }
+                                        }}
+                                        onMouseLeave={(e) => {
+                                          if (!isSending) {
+                                            e.currentTarget.style.backgroundColor = isError ? THEME.danger : THEME.primary;
+                                          }
+                                        }}
                                       >
                                         {isSending ? "⏳ Sending..." : isError ? "⚠️ Retry" : "📤 Send"}
                                       </button>
                                       {message && (
                                         <div style={{
                                           fontSize: "10px",
-                                          color: isError ? "#bf0711" : "#6d7175",
+                                          color: isError ? THEME.danger : THEME.textMuted,
                                           textAlign: "center"
                                         }}>
                                           {message}
