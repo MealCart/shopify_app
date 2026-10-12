@@ -21,6 +21,7 @@ const LABEL_SIZES = [
 
 const STORAGE_KEY = 'shopify_label_size';
 const SENT_ORDERS_KEY = 'shopify_sent_orders';
+const EDITED_ADDRESSES_KEY = 'shopify_edited_addresses';
 
 // ===== THEME COLORS =====
 const THEME = {
@@ -47,15 +48,25 @@ const THEME = {
 const DAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const;
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
-// ===== CUT-OFF TIME CONFIG =====
+// ===== AUSTRALIAN STATES =====
+const AUSTRALIAN_STATES = [
+  { value: "NSW", label: "NSW — New South Wales" },
+  { value: "VIC", label: "VIC — Victoria" },
+  { value: "QLD", label: "QLD — Queensland" },
+  { value: "WA", label: "WA — Western Australia" },
+  { value: "SA", label: "SA — South Australia" },
+  { value: "TAS", label: "TAS — Tasmania" },
+  { value: "ACT", label: "ACT — Australian Capital Territory" },
+  { value: "NT", label: "NT — Northern Territory" },
+];
+
+// ===== CUT-OFF TIME =====
 const CUT_OFF_HOUR = 16;
 const CUT_OFF_MINUTE = 0;
 
-// ===== SERVER TIME CACHE =====
 let serverTimeCache: Date | null = null;
 let serverTimeFetchPromise: Promise<Date> | null = null;
 
-// ===== GET SERVER TIME =====
 const getServerTimeSecure = async (): Promise<Date> => {
   if (serverTimeCache) {
     const age = Date.now() - serverTimeCache.getTime();
@@ -69,7 +80,7 @@ const getServerTimeSecure = async (): Promise<Date> => {
     mode: "cors",
   })
     .then(async (response) => {
-      if (!response.ok) throw new Error(`Failed to fetch server time: ${response.status}`);
+      if (!response.ok) throw new Error(`Failed: ${response.status}`);
       const data = await response.json();
       const time = new Date(data.time);
       serverTimeCache = time;
@@ -78,7 +89,7 @@ const getServerTimeSecure = async (): Promise<Date> => {
     })
     .catch((error) => {
       serverTimeFetchPromise = null;
-      console.error('❌ Failed to fetch server time, using device time:', error);
+      console.error('❌ Server time failed, using device time:', error);
       return new Date();
     });
 
@@ -94,25 +105,22 @@ const getAustralianTime = async () => {
   });
   const parts = formatter.formatToParts(serverTime);
   let day = '', month = '', year = '', hour = '', minute = '';
-  parts.forEach(part => {
-    if (part.type === 'day') day = part.value;
-    if (part.type === 'month') month = part.value;
-    if (part.type === 'year') year = part.value;
-    if (part.type === 'hour') hour = part.value;
-    if (part.type === 'minute') minute = part.value;
+  parts.forEach(p => {
+    if (p.type === 'day') day = p.value;
+    if (p.type === 'month') month = p.value;
+    if (p.type === 'year') year = p.value;
+    if (p.type === 'hour') hour = p.value;
+    if (p.type === 'minute') minute = p.value;
   });
   const ausDate = new Date(Date.UTC(parseInt(year), parseInt(month) - 1, parseInt(day)));
   return {
-    date: ausDate,
-    hour: parseInt(hour),
-    minutes: parseInt(minute),
+    date: ausDate, hour: parseInt(hour), minutes: parseInt(minute),
     dateStr: `${year}-${month}-${day}`
   };
 };
 
-const isPastCutOff = (hour: number, minutes: number): boolean => {
-  return hour > CUT_OFF_HOUR || (hour === CUT_OFF_HOUR && minutes > CUT_OFF_MINUTE);
-};
+const isPastCutOff = (hour: number, minutes: number): boolean =>
+  hour > CUT_OFF_HOUR || (hour === CUT_OFF_HOUR && minutes > CUT_OFF_MINUTE);
 
 const getMinAllowedDate = async (): Promise<string> => {
   const aus = await getAustralianTime();
@@ -167,7 +175,7 @@ const formatDateDisplay = (dateStr: string): string => {
       timeZone: 'Australia/Sydney',
       weekday: 'short', day: 'numeric', month: 'short', year: 'numeric'
     });
-  } catch (e) { return dateStr; }
+  } catch { return dateStr; }
 };
 
 // ===== LOADER =====
@@ -183,6 +191,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
               id
               name
               createdAt
+              note
               totalPriceSet { shopMoney { amount currencyCode } }
               customer { firstName lastName email phone }
               shippingAddress {
@@ -237,17 +246,18 @@ export default function OrdersIndex() {
   const [sendingStatus, setSendingStatus] = useState<{ [key: string]: 'idle' | 'sending' | 'success' | 'error' }>({});
   const [sendMessages, setSendMessages] = useState<{ [key: string]: string }>({});
 
-  // Edited address
+  // Edited addresses (now includes instructions)
   const [editedAddresses, setEditedAddresses] = useState<{
     [orderId: string]: {
       name: string; phone: string; address1: string; address2: string;
       city: string; provinceCode: string; zip: string; country: string;
+      instructions: string;
     }
   }>({});
   const [editingOrder, setEditingOrder] = useState<any | null>(null);
   const [editForm, setEditForm] = useState({
     name: '', phone: '', address1: '', address2: '', city: '',
-    provinceCode: '', zip: '', country: 'Australia',
+    provinceCode: '', zip: '', country: 'Australia', instructions: '',
   });
   const [editSaving, setEditSaving] = useState(false);
 
@@ -275,6 +285,7 @@ export default function OrdersIndex() {
   // ===== BULK LABELS MODAL STATE =====
   const [showBulkLabelsModal, setShowBulkLabelsModal] = useState(false);
   const [bulkLabelsLayout, setBulkLabelsLayout] = useState<string>("4-per-page");
+  const [bulkLabelsInstructions, setBulkLabelsInstructions] = useState<string>("");
   const [bulkLabelsGenerating, setBulkLabelsGenerating] = useState(false);
   const [bulkLabelsProgress, setBulkLabelsProgress] = useState(0);
   const [bulkLabelsError, setBulkLabelsError] = useState<string | null>(null);
@@ -295,7 +306,19 @@ export default function OrdersIndex() {
       provinceCode: s.provinceCode || s.province || '',
       zip: s.zip || '',
       country: s.country || 'Australia',
+      instructions: order.note || '',
     };
+  };
+
+  // ===== CHECK IF ADDRESS IS COMPLETE =====
+  const checkAddressComplete = (order: any): { complete: boolean; missing: string[] } => {
+    const addr = getEffectiveAddress(order);
+    const missing: string[] = [];
+    if (!addr.city || !addr.city.trim()) missing.push('City');
+    if (!addr.provinceCode || !addr.provinceCode.trim()) missing.push('State');
+    if (!addr.zip || !addr.zip.trim()) missing.push('Postcode');
+    if (!addr.phone || !addr.phone.trim()) missing.push('Phone');
+    return { complete: missing.length === 0, missing };
   };
 
   // ===== OPEN EDIT MODAL =====
@@ -306,6 +329,7 @@ export default function OrdersIndex() {
       name: addr.name, phone: addr.phone, address1: addr.address1,
       address2: addr.address2, city: addr.city,
       provinceCode: addr.provinceCode, zip: addr.zip, country: addr.country,
+      instructions: addr.instructions || '',
     });
   };
 
@@ -346,9 +370,9 @@ export default function OrdersIndex() {
           setCutOffMessage(`📅 Tomorrow (${formatDateDisplay(info.tomorrow)}) is available. Book before 4 PM (AEST time) for next-day delivery.`);
         }
       } catch (error) {
-        console.error('❌ Failed to initialize dates:', error);
+        console.error('❌ Failed:', error);
         setMinAllowedDate(new Date().toISOString().split('T')[0]);
-        setCutOffMessage('⚠️ Using device time. Please check your system clock.');
+        setCutOffMessage('⚠️ Using device time.');
       } finally {
         setLoadingTime(false);
       }
@@ -376,14 +400,14 @@ export default function OrdersIndex() {
       if (savedSentOrders) {
         try { setSentOrders(JSON.parse(savedSentOrders)); } catch (e) { console.error(e); }
       }
-      const savedEditedAddresses = localStorage.getItem('shopify_edited_addresses');
+      const savedEditedAddresses = localStorage.getItem(EDITED_ADDRESSES_KEY);
       if (savedEditedAddresses) {
         try { setEditedAddresses(JSON.parse(savedEditedAddresses)); } catch (e) { console.error(e); }
       }
     }
   }, []);
 
-  // Persist data
+  // Persist
   useEffect(() => {
     if (typeof window !== 'undefined' && Object.keys(sentOrders).length > 0) {
       localStorage.setItem(SENT_ORDERS_KEY, JSON.stringify(sentOrders));
@@ -391,8 +415,8 @@ export default function OrdersIndex() {
   }, [sentOrders]);
 
   useEffect(() => {
-    if (typeof window !== 'undefined' && Object.keys(editedAddresses).length > 0) {
-      localStorage.setItem('shopify_edited_addresses', JSON.stringify(editedAddresses));
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(EDITED_ADDRESSES_KEY, JSON.stringify(editedAddresses));
     }
   }, [editedAddresses]);
 
@@ -496,17 +520,15 @@ export default function OrdersIndex() {
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
         body: JSON.stringify({
-          postCode: postcode.trim(),
-          postcode: postcode.trim(),
-          post_code: postcode.trim(),
-          date: dateStr,
+          postCode: postcode.trim(), postcode: postcode.trim(),
+          post_code: postcode.trim(), date: dateStr,
         }),
       });
       const data = await response.json();
       if (!response.ok || !data.success) {
         setPostcodeValidation(prev => ({
           ...prev,
-          [orderId]: { status: 'invalid', message: data.error || `Postcode ${postcode} is not deliverable`, postCode: postcode }
+          [orderId]: { status: 'invalid', message: data.error || `Postcode ${postcode} not deliverable`, postCode: postcode }
         }));
         return;
       }
@@ -549,7 +571,6 @@ export default function OrdersIndex() {
         }));
       }
     } catch (error) {
-      console.error('Postcode validation error:', error);
       setPostcodeValidation(prev => ({
         ...prev,
         [orderId]: { status: 'invalid', message: 'Failed to validate postcode', postCode: postcode }
@@ -557,7 +578,7 @@ export default function OrdersIndex() {
     }
   };
 
-  // Auto-validate (skip sent orders)
+  // Auto-validate
   useEffect(() => {
     if (!isLoggedIn || orders.length === 0 || loadingTime) return;
     const timers: NodeJS.Timeout[] = [];
@@ -612,7 +633,7 @@ export default function OrdersIndex() {
   const getSentOrderDetails = (orderId: string) => sentOrders[orderId] || null;
   const getLabelSizeLabel = (id: string) => LABEL_SIZES.find(s => s.id === id)?.label || id;
 
-  // ===== GENERATE SINGLE LABELS (existing) =====
+  // ===== GENERATE SINGLE LABELS =====
   const generateAndDownloadLabels = async (
     doNumber: string, barcodes: string[], recipientName: string, address: string,
     company: string, phone: string, instructions: string,
@@ -690,7 +711,7 @@ export default function OrdersIndex() {
       const result = await generateAndDownloadLabels(
         doNumber, barcodes, addr.name,
         addr.address2 ? `${addr.address1}, ${addr.address2}` : addr.address1,
-        '', addr.phone, '', addr.provinceCode, addr.zip, addr.city
+        '', addr.phone, addr.instructions || '', addr.provinceCode, addr.zip, addr.city
       );
       if (result.success) {
         shopify.toast.show(`✅ Labels downloaded for ${doNumber}`);
@@ -705,7 +726,7 @@ export default function OrdersIndex() {
     }
   };
 
-  // ===== GENERATE COMBINED LABELS (NEW) =====
+  // ===== GENERATE COMBINED LABELS =====
   const generateCombinedLabels = async (jobs: any[], layout: string): Promise<{ success: boolean; error?: string }> => {
     try {
       const token = typeof window !== 'undefined' ? localStorage.getItem("auth_token") : null;
@@ -729,9 +750,7 @@ export default function OrdersIndex() {
         throw new Error(errorMsg);
       }
 
-      // Response is expected to be a PDF blob
       const contentType = response.headers.get('content-type');
-
       if (contentType && contentType.includes('application/pdf')) {
         const blob = await response.blob();
         const url = window.URL.createObjectURL(blob);
@@ -745,10 +764,8 @@ export default function OrdersIndex() {
         return { success: true };
       }
 
-      // If not PDF, try JSON (some backends return a URL)
       const data = await response.json();
       if (data.error) throw new Error(data.error);
-
       if (data.url || data.filename) {
         const filename = data.filename || `Combined_Labels_${new Date().toISOString().split('T')[0]}.pdf`;
         const encodedFilename = encodeURIComponent(filename);
@@ -778,12 +795,12 @@ export default function OrdersIndex() {
       return { success: true };
     } catch (error) {
       console.error('Error generating combined labels:', error);
-      return { success: false, error: error instanceof Error ? error.message : 'Failed to generate combined labels' };
+      return { success: false, error: error instanceof Error ? error.message : 'Failed' };
     }
   };
 
-  // ===== BUILD JOBS PAYLOAD FOR COMBINED LABELS =====
-  const buildBulkJobsPayload = (selectedOrderList: any[]) => {
+  // ===== BUILD JOBS PAYLOAD =====
+  const buildBulkJobsPayload = (selectedOrderList: any[], instructions: string) => {
     return selectedOrderList.map(order => {
       const orderId = order.id;
       const sentDetails = sentOrders[orderId];
@@ -797,6 +814,11 @@ export default function OrdersIndex() {
         }
       }
 
+      // Use per-order instructions if edited, otherwise use the batch-wide instructions
+      const finalInstructions = addr.instructions && addr.instructions.trim()
+        ? addr.instructions
+        : (instructions || '');
+
       return {
         doNumber: sentDetails?.doNumber || '',
         barcodes,
@@ -804,7 +826,7 @@ export default function OrdersIndex() {
         address: addr.address2 ? `${addr.address1}, ${addr.address2}` : addr.address1,
         companyName: '',
         phone: addr.phone || '',
-        instructions: '',
+        instructions: finalInstructions,
         state: addr.provinceCode || '',
         postcode: addr.zip || '',
         city: addr.city || '',
@@ -814,7 +836,6 @@ export default function OrdersIndex() {
 
   // ===== OPEN BULK LABELS MODAL =====
   const openBulkLabelsModal = (groupKey: string, groupOrders: any[]) => {
-    // Only use orders that were ALREADY SENT (have DO numbers)
     const selectedSentOrders = groupOrders.filter(o => selectedOrders[o.id] && sentOrders[o.id]);
 
     if (selectedSentOrders.length === 0) {
@@ -824,6 +845,7 @@ export default function OrdersIndex() {
 
     setBulkLabelsBookings(selectedSentOrders);
     setBulkLabelsLayout(selectedLabelSize || "4-per-page");
+    setBulkLabelsInstructions("");
     setBulkLabelsProgress(0);
     setBulkLabelsCurrentJob(0);
     setBulkLabelsError(null);
@@ -843,7 +865,7 @@ export default function OrdersIndex() {
     setBulkLabelsCurrentJob(0);
     setBulkLabelsError(null);
 
-    const jobs = buildBulkJobsPayload(bulkLabelsBookings);
+    const jobs = buildBulkJobsPayload(bulkLabelsBookings, bulkLabelsInstructions);
     const validJobs = jobs.filter(j => j.barcodes && j.barcodes.length > 0);
 
     if (validJobs.length === 0) {
@@ -869,17 +891,11 @@ export default function OrdersIndex() {
       }
 
       shopify.toast.show(`✅ Combined PDF downloaded (${validJobs.length} jobs)`);
-
-      setTimeout(() => {
-        setShowBulkLabelsModal(false);
-      }, 1000);
+      setTimeout(() => { setShowBulkLabelsModal(false); }, 1000);
 
     } catch (err) {
       window.clearInterval(progressInterval);
-      console.error("Error generating combined labels:", err);
-      setBulkLabelsError(
-        err instanceof Error ? err.message : "Failed to generate labels. Please try again."
-      );
+      setBulkLabelsError(err instanceof Error ? err.message : "Failed to generate labels.");
     } finally {
       setBulkLabelsGenerating(false);
     }
@@ -890,6 +906,18 @@ export default function OrdersIndex() {
     const orderId = order.id;
     if (isOrderSent(orderId)) {
       shopify.toast.show("This order has already been sent");
+      return;
+    }
+
+    // ✅ ADDRESS COMPLETENESS CHECK
+    const addrCheck = checkAddressComplete(order);
+    if (!addrCheck.complete) {
+      shopify.toast.show(`❌ Missing: ${addrCheck.missing.join(', ')}. Please edit the address first.`);
+      setSendingStatus(prev => ({ ...prev, [orderId]: 'error' }));
+      setSendMessages(prev => ({
+        ...prev,
+        [orderId]: `❌ Missing: ${addrCheck.missing.join(', ')}`
+      }));
       return;
     }
 
@@ -936,7 +964,8 @@ export default function OrdersIndex() {
         time_window: "07:00-18:00",
         address: fullAddress || addr.address1 || "Address not provided",
         deliver_to: fullName, phone: customerPhone || "Not provided",
-        notify_email: email, instructions: "",
+        notify_email: email,
+        instructions: addr.instructions || '',
         group_id: groupId || "", group_name: groupName || "",
         delivery_type: "delivery", cartons: boxesCount, boxes: boxesCount, weight: 0,
         address_1: addr.address1, address_2: addr.address2,
@@ -980,17 +1009,22 @@ export default function OrdersIndex() {
     }
   };
 
+  // ===== BATCH SEND TO MEALCART =====
   const sendBatchToMealCart = async (groupKey: string, groupOrders: any[]) => {
-    // Only send UN-SENT orders
+    // Only send UNSENT orders with valid postcodes + complete addresses
     const selectedOrderIds = getSelectedOrderIds(groupOrders).filter(id => {
       if (isOrderSent(id)) return false;
+      const order = groupOrders.find(o => o.id === id);
+      if (!order) return false;
+      const addrCheck = checkAddressComplete(order);
+      if (!addrCheck.complete) return false;
       const validation = postcodeValidation[id];
       if (validation?.status === 'invalid' || validation?.status === 'checking') return false;
       return true;
     });
 
     if (selectedOrderIds.length === 0) {
-      shopify.toast.show("No unsent orders selected");
+      shopify.toast.show("No valid unsent orders selected. Check for missing address fields or invalid postcodes.");
       return;
     }
 
@@ -1016,6 +1050,7 @@ export default function OrdersIndex() {
     setGroupSelectAll(prev => ({ ...prev, [groupKey]: false }));
   };
 
+  // ===== DATE GROUPING =====
   const formatDateForGrouping = (d: string) => new Date(d).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
   const isToday = (d: string) => new Date(d).toDateString() === new Date().toDateString();
   const isYesterday = (d: string) => {
@@ -1221,15 +1256,11 @@ export default function OrdersIndex() {
                           {selectedCount > 0 && (
                             <span style={{ fontSize: "12px", color: THEME.warning, marginLeft: "8px" }}>
                               • {selectedCount} selected
-                              {unsentSelectedCount > 0 && ` (${unsentSelectedCount} unsent`}
-                              {unsentSelectedCount > 0 && sentSelectedCount > 0 && `, `}
-                              {sentSelectedCount > 0 && `${sentSelectedCount} sent)`}
                             </span>
                           )}
                         </h4>
                       </div>
                       <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-                        {/* Send Selected (only for unsent orders) */}
                         {unsentSelectedCount > 0 && (
                           <button
                             onClick={() => sendBatchToMealCart(groupKey, group.orders)}
@@ -1246,7 +1277,6 @@ export default function OrdersIndex() {
                           </button>
                         )}
 
-                        {/* Print Labels (only for sent orders) */}
                         {sentSelectedCount > 0 && (
                           <button
                             onClick={() => openBulkLabelsModal(groupKey, group.orders)}
@@ -1298,6 +1328,8 @@ export default function OrdersIndex() {
                             const validation = postcodeValidation[orderId] || { status: 'idle' };
                             const addr = getEffectiveAddress(order);
                             const hasEditedAddress = !!editedAddresses[orderId];
+                            const addrCheck = checkAddressComplete(order);
+
                             const fullAddress = [addr.address1, addr.address2, addr.city, addr.provinceCode, addr.zip].filter(Boolean).join(', ') || 'N/A';
                             const fullName = addr.name || 'Guest';
                             const email = order.customer?.email || 'N/A';
@@ -1311,7 +1343,8 @@ export default function OrdersIndex() {
                                            validation.status !== 'invalid' &&
                                            validation.status !== 'checking' &&
                                            validation.status !== 'no-postcode' &&
-                                           !isDateBlocked;
+                                           !isDateBlocked &&
+                                           addrCheck.complete;
 
                             return (
                               <tr key={orderId || index}>
@@ -1333,10 +1366,19 @@ export default function OrdersIndex() {
                                   {hasEditedAddress && <span style={{ marginLeft: "6px", fontSize: "10px", color: THEME.primary, fontWeight: "600" }}>(edited)</span>}
                                 </td>
                                 <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}`, fontSize: "12px" }}>{email}</td>
-                                <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}`, fontSize: "12px" }}>{phone}</td>
-                                <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}`, fontSize: "12px", maxWidth: "240px", position: "relative" }}>
+                                <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}`, fontSize: "12px" }}>
+                                  {addr.phone ? phone : <span style={{ color: THEME.danger, fontWeight: "600" }}>Missing</span>}
+                                </td>
+                                <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}`, fontSize: "12px", maxWidth: "240px" }}>
                                   <div style={{ display: "flex", alignItems: "flex-start", gap: "6px" }}>
-                                    <div style={{ flex: 1, wordBreak: "break-word" }}>{fullAddress}</div>
+                                    <div style={{ flex: 1, wordBreak: "break-word" }}>
+                                      {fullAddress}
+                                      {!addrCheck.complete && (
+                                        <div style={{ marginTop: "3px", fontSize: "10px", color: THEME.danger, fontWeight: "600" }}>
+                                          ⚠️ Missing: {addrCheck.missing.join(', ')}
+                                        </div>
+                                      )}
+                                    </div>
                                     <button onClick={() => openEditModal(order)} disabled={sent}
                                       title={sent ? "Cannot edit — order already sent" : "Edit address"}
                                       style={{
@@ -1375,7 +1417,7 @@ export default function OrdersIndex() {
                                   />
                                   {isDateBlocked && !sent && (
                                     <div style={{ fontSize: "10px", color: THEME.danger, marginTop: "3px", fontWeight: "600" }}>
-                                      ⏰ Past 4 PM — not available
+                                      ⏰ Past 4 PM
                                     </div>
                                   )}
                                 </td>
@@ -1392,7 +1434,11 @@ export default function OrdersIndex() {
                                 </td>
                                 <td style={{ padding: "10px 6px", borderBottom: `1px solid ${THEME.border}`, minWidth: "200px" }}>
                                   {sent ? (
-                                    <span style={{ fontSize: "11px", color: THEME.textMuted }}>— (already sent)</span>
+                                    <span style={{ fontSize: "11px", color: THEME.textMuted }}>— (sent)</span>
+                                  ) : !addrCheck.complete ? (
+                                    <div style={{ fontSize: "11px", color: THEME.danger, fontWeight: "600" }}>
+                                      ⚠️ Address incomplete
+                                    </div>
                                   ) : validation.status === 'checking' ? (
                                     <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: THEME.textMuted }}>
                                       <div style={{ width: "12px", height: "12px", border: `2px solid ${THEME.border}`, borderTop: `2px solid ${THEME.primary}`, borderRadius: "50%", animation: "spin 1s linear infinite" }} />
@@ -1408,16 +1454,15 @@ export default function OrdersIndex() {
                                   ) : validation.status === 'invalid' ? (
                                     <div style={{ display: "flex", flexDirection: "column", gap: "3px", padding: "6px 8px", backgroundColor: THEME.dangerLight, border: `1px solid ${THEME.dangerBorder}`, borderRadius: "4px" }}>
                                       <span style={{ fontSize: "11px", fontWeight: "600", color: THEME.danger }}>❌ Not Deliverable</span>
-                                      {validation.suburb && <div style={{ fontSize: "10px", color: THEME.textMuted }}>{validation.suburb}{validation.run ? ` • ${validation.run}` : ''}</div>}
                                       <div style={{ fontSize: "10px", color: THEME.danger }}>{validation.message}</div>
                                       {validation.nextAvailableDay && (
                                         <div style={{ fontSize: "10px", color: THEME.success, fontWeight: "600" }}>
-                                          ✅ Next: {validation.nextAvailableDay}{validation.nextAvailableDate ? ` (${validation.nextAvailableDate})` : ''}
+                                          ✅ Next: {validation.nextAvailableDay}
                                         </div>
                                       )}
                                     </div>
                                   ) : validation.status === 'no-postcode' ? (
-                                    <span style={{ fontSize: "11px", color: THEME.danger }}>⚠️ No postcode in order</span>
+                                    <span style={{ fontSize: "11px", color: THEME.danger }}>⚠️ No postcode</span>
                                   ) : (
                                     <span style={{ fontSize: "11px", color: THEME.textMuted }}>Waiting...</span>
                                   )}
@@ -1436,10 +1481,12 @@ export default function OrdersIndex() {
                                         onClick={() => sendToMealCart(order)}
                                         disabled={isSending || !canSend}
                                         title={
-                                          isDateBlocked ? "Tomorrow is not available — it's past 4 PM AEST"
+                                          !addrCheck.complete ? `Missing: ${addrCheck.missing.join(', ')} — Click edit to fix`
+                                          : isDateBlocked ? "Tomorrow is not available — past 4 PM AEST"
                                           : validation.status === 'invalid' ? `Cannot send: ${validation.message}`
-                                          : validation.status === 'checking' ? "Please wait — validating postcode"
-                                          : !canSend ? "Cannot send this order" : "Send to MealCart"
+                                          : validation.status === 'checking' ? "Validating..."
+                                          : !canSend ? "Cannot send"
+                                          : "Send to MealCart"
                                         }
                                         style={{
                                           padding: "5px 12px",
@@ -1451,6 +1498,7 @@ export default function OrdersIndex() {
                                         }}
                                       >
                                         {isSending ? "⏳ Sending..."
+                                          : !addrCheck.complete ? "✏️ Fix Address"
                                           : isDateBlocked ? "⏰ Blocked"
                                           : validation.status === 'invalid' ? "🚫 Blocked"
                                           : validation.status === 'checking' ? "⏳ Wait..."
@@ -1590,6 +1638,34 @@ export default function OrdersIndex() {
               </div>
             )}
 
+            {/* ✅ NEW: Special Instructions Input */}
+            <div style={{ marginBottom: "20px" }}>
+              <label style={{ display: "block", fontSize: "13px", fontWeight: "600", color: THEME.textDark, marginBottom: "8px" }}>
+                Special Instructions <span style={{ fontWeight: "400", color: THEME.textMuted }}>(optional)</span>
+              </label>
+              <textarea
+                value={bulkLabelsInstructions}
+                onChange={(e) => setBulkLabelsInstructions(e.target.value)}
+                disabled={bulkLabelsGenerating}
+                placeholder="e.g. Leave at reception, call on arrival, fragile..."
+                rows={3}
+                style={{
+                  width: "100%", padding: "10px 12px",
+                  border: `1px solid ${THEME.primaryBorder}`,
+                  borderRadius: "8px", fontSize: "13px",
+                  boxSizing: "border-box", outline: "none",
+                  backgroundColor: THEME.white, color: THEME.textDark,
+                  resize: "vertical", fontFamily: "inherit",
+                  opacity: bulkLabelsGenerating ? 0.6 : 1
+                }}
+                onFocus={(e) => { e.target.style.borderColor = THEME.primary; }}
+                onBlur={(e) => { e.target.style.borderColor = THEME.primaryBorder; }}
+              />
+              <p style={{ margin: "6px 0 0 0", fontSize: "11px", color: THEME.textMuted }}>
+                💡 This will be added to all labels. Per-order instructions (from order edits) take precedence.
+              </p>
+            </div>
+
             {/* Layout Selection */}
             <div style={{ marginBottom: "20px" }}>
               <label style={{ display: "block", fontSize: "13px", fontWeight: "600", color: THEME.textDark, marginBottom: "10px" }}>
@@ -1661,11 +1737,11 @@ export default function OrdersIndex() {
                     : bulkLabelsLayout === "6-per-page" ? "6"
                     : bulkLabelsLayout === "8-per-page-1" || bulkLabelsLayout === "8-per-page-2" ? "8"
                     : "custom"}
-                </strong> labels per page. A single download will be triggered.
+                </strong> labels per page.
               </p>
             </div>
 
-            {/* Footer Buttons */}
+            {/* Footer */}
             <div style={{ display: "flex", gap: "12px", justifyContent: "flex-end" }}>
               <button
                 onClick={() => setShowBulkLabelsModal(false)}
@@ -1759,31 +1835,50 @@ export default function OrdersIndex() {
             </div>
 
             <div style={{ display: "grid", gap: "16px" }}>
-              {[
-                { label: 'Recipient Name', key: 'name', placeholder: '' },
-                { label: 'Phone Number', key: 'phone', placeholder: '0412 345 678' },
-                { label: 'Address Line 1', key: 'address1', placeholder: '123 Main St' },
-              ].map(field => (
-                <div key={field.key}>
-                  <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: "500", color: THEME.textDark }}>
-                    {field.label}
-                  </label>
-                  <input type="text" value={(editForm as any)[field.key]}
-                    onChange={(e) => setEditForm(prev => ({ ...prev, [field.key]: e.target.value }))}
-                    placeholder={field.placeholder}
-                    style={{
-                      width: "100%", padding: "10px 12px",
-                      border: `1px solid ${THEME.primaryBorder}`,
-                      borderRadius: "8px", fontSize: "14px",
-                      boxSizing: "border-box", outline: "none",
-                      backgroundColor: THEME.white, color: THEME.textDark
-                    }}
-                    onFocus={(e) => { e.target.style.borderColor = THEME.primary; }}
-                    onBlur={(e) => { e.target.style.borderColor = THEME.primaryBorder; }}
-                  />
-                </div>
-              ))}
+              {/* Recipient Name */}
+              <div>
+                <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: "500", color: THEME.textDark }}>Recipient Name</label>
+                <input type="text" value={editForm.name}
+                  onChange={(e) => setEditForm(prev => ({ ...prev, name: e.target.value }))}
+                  style={{ width: "100%", padding: "10px 12px", border: `1px solid ${THEME.primaryBorder}`, borderRadius: "8px", fontSize: "14px", boxSizing: "border-box", outline: "none", backgroundColor: THEME.white, color: THEME.textDark }}
+                  onFocus={(e) => { e.target.style.borderColor = THEME.primary; }}
+                  onBlur={(e) => { e.target.style.borderColor = THEME.primaryBorder; }}
+                />
+              </div>
 
+              {/* Phone (Required) */}
+              <div>
+                <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: "500", color: THEME.textDark }}>
+                  Phone Number <span style={{ color: THEME.danger }}>*</span>
+                </label>
+                <input type="tel" value={editForm.phone}
+                  onChange={(e) => setEditForm(prev => ({ ...prev, phone: e.target.value }))}
+                  placeholder="0412 345 678"
+                  style={{
+                    width: "100%", padding: "10px 12px",
+                    border: `1px solid ${!editForm.phone.trim() ? THEME.danger : THEME.primaryBorder}`,
+                    borderRadius: "8px", fontSize: "14px", boxSizing: "border-box", outline: "none",
+                    backgroundColor: THEME.white, color: THEME.textDark
+                  }}
+                  onFocus={(e) => { e.target.style.borderColor = THEME.primary; }}
+                  onBlur={(e) => { e.target.style.borderColor = !editForm.phone.trim() ? THEME.danger : THEME.primaryBorder; }}
+                />
+                {!editForm.phone.trim() && <p style={{ margin: "4px 0 0 0", fontSize: "11px", color: THEME.danger }}>Phone is required</p>}
+              </div>
+
+              {/* Address Line 1 */}
+              <div>
+                <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: "500", color: THEME.textDark }}>Address Line 1</label>
+                <input type="text" value={editForm.address1}
+                  onChange={(e) => setEditForm(prev => ({ ...prev, address1: e.target.value }))}
+                  placeholder="123 Main St"
+                  style={{ width: "100%", padding: "10px 12px", border: `1px solid ${THEME.primaryBorder}`, borderRadius: "8px", fontSize: "14px", boxSizing: "border-box", outline: "none", backgroundColor: THEME.white, color: THEME.textDark }}
+                  onFocus={(e) => { e.target.style.borderColor = THEME.primary; }}
+                  onBlur={(e) => { e.target.style.borderColor = THEME.primaryBorder; }}
+                />
+              </div>
+
+              {/* Address Line 2 */}
               <div>
                 <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: "500", color: THEME.textDark }}>
                   Address Line 2 <span style={{ color: THEME.textMuted, fontWeight: "400" }}>(optional)</span>
@@ -1791,57 +1886,70 @@ export default function OrdersIndex() {
                 <input type="text" value={editForm.address2}
                   onChange={(e) => setEditForm(prev => ({ ...prev, address2: e.target.value }))}
                   placeholder="Apt, Suite, Building..."
-                  style={{
-                    width: "100%", padding: "10px 12px",
-                    border: `1px solid ${THEME.primaryBorder}`,
-                    borderRadius: "8px", fontSize: "14px",
-                    boxSizing: "border-box", outline: "none",
-                    backgroundColor: THEME.white, color: THEME.textDark
-                  }}
+                  style={{ width: "100%", padding: "10px 12px", border: `1px solid ${THEME.primaryBorder}`, borderRadius: "8px", fontSize: "14px", boxSizing: "border-box", outline: "none", backgroundColor: THEME.white, color: THEME.textDark }}
                   onFocus={(e) => { e.target.style.borderColor = THEME.primary; }}
                   onBlur={(e) => { e.target.style.borderColor = THEME.primaryBorder; }}
                 />
               </div>
 
+              {/* City + State (both required) */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
                 <div>
-                  <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: "500", color: THEME.textDark }}>City</label>
+                  <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: "500", color: THEME.textDark }}>
+                    City <span style={{ color: THEME.danger }}>*</span>
+                  </label>
                   <input type="text" value={editForm.city}
                     onChange={(e) => setEditForm(prev => ({ ...prev, city: e.target.value }))}
                     placeholder="Melbourne"
-                    style={{ width: "100%", padding: "10px 12px", border: `1px solid ${THEME.primaryBorder}`, borderRadius: "8px", fontSize: "14px", boxSizing: "border-box", outline: "none", backgroundColor: THEME.white, color: THEME.textDark }}
+                    style={{
+                      width: "100%", padding: "10px 12px",
+                      border: `1px solid ${!editForm.city.trim() ? THEME.danger : THEME.primaryBorder}`,
+                      borderRadius: "8px", fontSize: "14px", boxSizing: "border-box", outline: "none",
+                      backgroundColor: THEME.white, color: THEME.textDark
+                    }}
                     onFocus={(e) => { e.target.style.borderColor = THEME.primary; }}
-                    onBlur={(e) => { e.target.style.borderColor = THEME.primaryBorder; }}
+                    onBlur={(e) => { e.target.style.borderColor = !editForm.city.trim() ? THEME.danger : THEME.primaryBorder; }}
                   />
+                  {!editForm.city.trim() && <p style={{ margin: "4px 0 0 0", fontSize: "11px", color: THEME.danger }}>City is required</p>}
                 </div>
                 <div>
-                  <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: "500", color: THEME.textDark }}>State</label>
+                  <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: "500", color: THEME.textDark }}>
+                    State <span style={{ color: THEME.danger }}>*</span>
+                  </label>
                   <select value={editForm.provinceCode}
                     onChange={(e) => setEditForm(prev => ({ ...prev, provinceCode: e.target.value }))}
-                    style={{ width: "100%", padding: "10px 12px", border: `1px solid ${THEME.primaryBorder}`, borderRadius: "8px", fontSize: "14px", boxSizing: "border-box", outline: "none", backgroundColor: THEME.white, color: THEME.textDark, cursor: "pointer" }}>
+                    style={{
+                      width: "100%", padding: "10px 12px",
+                      border: `1px solid ${!editForm.provinceCode ? THEME.danger : THEME.primaryBorder}`,
+                      borderRadius: "8px", fontSize: "14px", boxSizing: "border-box", outline: "none",
+                      backgroundColor: THEME.white, color: THEME.textDark, cursor: "pointer"
+                    }}>
                     <option value="">Select state...</option>
-                    <option value="NSW">NSW — New South Wales</option>
-                    <option value="VIC">VIC — Victoria</option>
-                    <option value="QLD">QLD — Queensland</option>
-                    <option value="WA">WA — Western Australia</option>
-                    <option value="SA">SA — South Australia</option>
-                    <option value="TAS">TAS — Tasmania</option>
-                    <option value="ACT">ACT — Australian Capital Territory</option>
-                    <option value="NT">NT — Northern Territory</option>
+                    {AUSTRALIAN_STATES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
                   </select>
+                  {!editForm.provinceCode && <p style={{ margin: "4px 0 0 0", fontSize: "11px", color: THEME.danger }}>State is required</p>}
                 </div>
               </div>
 
+              {/* Postcode + Country */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
                 <div>
-                  <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: "500", color: THEME.textDark }}>Postcode</label>
+                  <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: "500", color: THEME.textDark }}>
+                    Postcode <span style={{ color: THEME.danger }}>*</span>
+                  </label>
                   <input type="text" value={editForm.zip}
                     onChange={(e) => setEditForm(prev => ({ ...prev, zip: e.target.value }))}
                     placeholder="3000"
-                    style={{ width: "100%", padding: "10px 12px", border: `1px solid ${THEME.primaryBorder}`, borderRadius: "8px", fontSize: "14px", boxSizing: "border-box", outline: "none", backgroundColor: THEME.white, color: THEME.textDark }}
+                    style={{
+                      width: "100%", padding: "10px 12px",
+                      border: `1px solid ${!editForm.zip.trim() ? THEME.danger : THEME.primaryBorder}`,
+                      borderRadius: "8px", fontSize: "14px", boxSizing: "border-box", outline: "none",
+                      backgroundColor: THEME.white, color: THEME.textDark
+                    }}
                     onFocus={(e) => { e.target.style.borderColor = THEME.primary; }}
-                    onBlur={(e) => { e.target.style.borderColor = THEME.primaryBorder; }}
+                    onBlur={(e) => { e.target.style.borderColor = !editForm.zip.trim() ? THEME.danger : THEME.primaryBorder; }}
                   />
+                  {!editForm.zip.trim() && <p style={{ margin: "4px 0 0 0", fontSize: "11px", color: THEME.danger }}>Postcode is required</p>}
                 </div>
                 <div>
                   <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: "500", color: THEME.textDark }}>Country</label>
@@ -1852,6 +1960,32 @@ export default function OrdersIndex() {
                     onBlur={(e) => { e.target.style.borderColor = THEME.primaryBorder; }}
                   />
                 </div>
+              </div>
+
+              {/* ✅ Special Instructions */}
+              <div>
+                <label style={{ display: "block", marginBottom: "6px", fontSize: "13px", fontWeight: "500", color: THEME.textDark }}>
+                  Special Instructions <span style={{ color: THEME.textMuted, fontWeight: "400" }}>(optional)</span>
+                </label>
+                <textarea
+                  value={editForm.instructions}
+                  onChange={(e) => setEditForm(prev => ({ ...prev, instructions: e.target.value }))}
+                  placeholder="Leave at reception, call on arrival, fragile..."
+                  rows={2}
+                  style={{
+                    width: "100%", padding: "10px 12px",
+                    border: `1px solid ${THEME.primaryBorder}`,
+                    borderRadius: "8px", fontSize: "13px",
+                    boxSizing: "border-box", outline: "none",
+                    backgroundColor: THEME.white, color: THEME.textDark,
+                    resize: "vertical", fontFamily: "inherit"
+                  }}
+                  onFocus={(e) => { e.target.style.borderColor = THEME.primary; }}
+                  onBlur={(e) => { e.target.style.borderColor = THEME.primaryBorder; }}
+                />
+                <p style={{ margin: "4px 0 0 0", fontSize: "11px", color: THEME.textMuted }}>
+                  These instructions will be printed on the shipping label.
+                </p>
               </div>
             </div>
 
